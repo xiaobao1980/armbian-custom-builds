@@ -64,10 +64,10 @@ Actions 页面两个入口：
 构建成功后自动把镜像发布到 [Releases](../../releases) 页（类似 ophub/amlogic-s9xxx-armbian），**长期可下载，不随 Artifacts 过期**：
 
 - 单板 / 矩阵 workflow 均有 `publish_release` 开关（默认开）
-- tag 规则：`<board>-<yyyymmdd>`（如 `h96s-20261023`）；同日重跑会 **clobber 覆盖**同名资产
+- tag 规则：`<board>-<yyyymmdd>-r<run>`（如 `h96s-20261023-r11`）；**每次构建独立 Release，所有版本镜像全部保留**，仅同 run 号 rerun 时覆盖自身资产
 - 附件：`*.img.xz` + `.sha` 校验 + 构建参数/烧写命令写在 Release Notes
 - ⚠️ GitHub Release **单文件上限 2GiB**；超限文件（如 compress=none 的 6GB 裸 img）自动跳过、仅留 Artifacts
-- Actions Artifacts 仍并行保留 14 天，作为大文件/失败日志的兜底
+- Actions Artifacts 并行保留 **90 天**，作为大文件/失败日志的兜底；长期历史版本一律走 Releases
 
 > 🔴 **`build_ref` 必须用 `main`**（默认值已是 `main`）。armbian/build 的 `master` 是**旧分支**（老 CLI + 交互向导，CI 无 TTY 会直接退 255）；主线在 `main`。
 

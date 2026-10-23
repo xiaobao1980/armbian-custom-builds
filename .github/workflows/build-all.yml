@@ -122,7 +122,7 @@ jobs:
             armbian-build/output/images/**/*.img*.xz
             armbian-build/output/images/**/*.sha
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
 
       - name: 发布镜像到 GitHub Releases
         if: ${{ success() && inputs.publish_release }}
@@ -132,8 +132,9 @@ jobs:
           BUILD_ARGS: ${{ steps.args.outputs.args }}
         run: |
           set -euo pipefail
+          # 版本保留: tag 带 run 号, 每次构建独立 Release, 所有版本镜像都保留
           DATE_TAG="$(date -u +%Y%m%d)"
-          TAG="${BOARD_NAME}-${DATE_TAG}"
+          TAG="${BOARD_NAME}-${DATE_TAG}-r${GITHUB_RUN_NUMBER}"
           IMG_DIR="armbian-build/output/images"
 
           # GitHub Release 单文件上限 2GiB; 超限文件仅留在 Artifacts
@@ -180,12 +181,12 @@ jobs:
           "
 
           if gh release view "${TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release ${TAG} 已存在, 追加/覆盖资产"
+            echo "Release ${TAG} 已存在 (rerun 同号), 覆盖资产"
             gh release upload "${TAG}" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "${TAG}" "${ASSETS[@]}" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Armbian ${BOARD_NAME} ${DATE_TAG}" \
+              --title "Armbian ${BOARD_NAME} ${DATE_TAG} #${GITHUB_RUN_NUMBER}" \
               --notes "${NOTES}"
           fi
           echo "Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
@@ -196,4 +197,4 @@ jobs:
         with:
           name: build-log-${{ matrix.board }}-${{ github.run_number }}
           path: armbian-build/output/logs/**
-          retention-days: 14
+          retention-days: 90
