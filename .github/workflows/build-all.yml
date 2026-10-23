@@ -66,18 +66,22 @@ jobs:
         run: |
           # shellcheck disable=SC1091
           source "boards/${{ matrix.board }}/build.env"
-          echo "args=BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}" >> "$GITHUB_OUTPUT"
+          ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
+          if [ -n "${ENABLE_EXTENSIONS:-}" ]; then ARGS="${ARGS} ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS}"; fi
+          echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: 编译镜像
         run: |
           cd armbian-build
-          ./compile.sh build \
+          # 目标命令 build 必须放最后: armbian 只解析开头连续的 KEY=VALUE
+          ./compile.sh \
             ${{ steps.args.outputs.args }} \
             KERNEL_CONFIGURE=no \
             EXPERT=yes \
             SHARE_LOG=yes \
             DOWNLOAD_MIRROR=china \
-            COMPRESS_OUTPUTIMAGE=sha,img,xz
+            COMPRESS_OUTPUTIMAGE=sha,img,xz \
+            build
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4

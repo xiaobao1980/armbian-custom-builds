@@ -79,23 +79,26 @@ jobs:
           if [ -n "${{ inputs.release }}" ]; then RELEASE="${{ inputs.release }}"; fi
           if [ -n "${{ inputs.desktop }}" ]; then DESKTOP="${{ inputs.desktop }}"; fi
           ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
+          # 扩展: 为空则不传, 避免覆盖板卡 csc 里可能已有的 ENABLE_EXTENSIONS
+          if [ -n "${ENABLE_EXTENSIONS:-}" ]; then ARGS="${ARGS} ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS}"; fi
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
           echo "构建参数: ${ARGS}"
 
       - name: 编译镜像
         run: |
           cd armbian-build
-          # 不单独跑 `compile.sh requirements`: 该 target 在本版本会落入
-          # "选择构建目标"的交互分支, CI 无 TTY 直接退 255。
-          # build 阶段自己会做完整 host 准备(内部 sudo), 官方 action.yml 也是这么调的。
+          # ⚠️ 参数顺序是硬约束: armbian 的 cli-entrypoint.sh:96 只解析「开头连续」的
+          # KEY=VALUE, 目标命令(build)必须放最后; 否则所有参数都不会生效,
+          # armbian 会当成无参调用进入 dialog 交互 → CI 无 TTY → 退 255。
           # EXPERT=yes 跳过社区板(.csc)的交互确认。
-          ./compile.sh build \
+          ./compile.sh \
             ${{ steps.args.outputs.args }} \
             KERNEL_CONFIGURE=no \
             EXPERT=yes \
             SHARE_LOG=yes \
             DOWNLOAD_MIRROR=china \
-            COMPRESS_OUTPUTIMAGE=sha,img,xz
+            COMPRESS_OUTPUTIMAGE=sha,img,xz \
+            build
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4

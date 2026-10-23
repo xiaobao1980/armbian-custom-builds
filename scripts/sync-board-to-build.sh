@@ -36,4 +36,13 @@ echo "==> 同步板卡 '${BOARD}' -> ${BUILD}"
 sync_subdir config
 sync_subdir patch
 sync_subdir userpatches
+
+# 公共扩展 (common/extensions/*.sh) —— 所有板卡共享, 例如 mesa-vpu
+# 框架按名字解析: ENABLE_EXTENSIONS=mesa-vpu -> userpatches/extensions/mesa-vpu.sh
+if [[ -d "${REPO_ROOT}/common/extensions" ]]; then
+    mkdir -p "${BUILD}/userpatches/extensions"
+    cp -a "${REPO_ROOT}/common/extensions/." "${BUILD}/userpatches/extensions/"
+    echo "  synced common/extensions/ ($(find "${REPO_ROOT}/common/extensions" -type f | wc -l | tr -d ' ') files)"
+fi
+
 echo "==> 完成"
