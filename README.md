@@ -33,8 +33,24 @@ common/extensions/
 
 Actions 页面两个入口：
 
-1. **Build Armbian Image (单板)** — 选板卡，可选覆盖 BRANCH/RELEASE/DESKTOP/armbian build ref，跑完在 Artifacts 下载 `*.img.xz`（保留 14 天）。
+1. **Build Armbian Image (单板)** — 下拉式参数（参照 ophub/amlogic-s9xxx-armbian 的交互），跑完在 Artifacts 下载 `*.img.xz`（保留 14 天）。
 2. **Build All Boards (矩阵)** — 5 块板并行矩阵构建，可用 `boards` 输入筛选（如 `h96s,am60-sa12`）。
+
+单板手动触发的参数一览（全部为下拉，选 `default` 即回落该板 `build.env`）：
+
+| 输入 | 取值 | 映射到 armbian |
+|---|---|---|
+| `board` | 5 块板 | `BOARD` |
+| `edition` | `default` / `desktop` / `server` / `minimal` | `BUILD_DESKTOP` + `BUILD_MINIMAL` |
+| `desktop_environment` | `default` / `gnome` / `xfce` / `kde-plasma` / `cinnamon` / `mate` / `lxqt` / `i3-wm` / `budgie` | `DESKTOP_ENVIRONMENT` |
+| `desktop_tier` | `default` / `minimal` / `mid` / `full` | `DESKTOP_TIER` |
+| `kernel_branch` | `default` / `vendor` / `current` / `edge` / `legacy` | `BRANCH` |
+| `kernel_version` | 如 `6.1.172`（留空=跟随分支最新） | `KERNELBRANCH=tag:v<x.y.z>` |
+| `release` | `default` / `noble` / `bookworm` / `trixie` / `jammy` / `resolute` | `RELEASE` |
+| `compress` | `xz` / `7z` / `none` | `COMPRESS_OUTPUTIMAGE` |
+| `build_ref` | 默认 `main` | armbian/build 的 git 引用 |
+
+组装后的参数串会在运行日志的「构建摘要」步骤里打印，便于核对。**架构守卫**会在构建前拦掉不可能的搭配（如 armhf 板选 `gnome`），直接给出可选清单而不是等到装包阶段才失败。
 
 免费 runner 单次构建约 1.5–3 小时（限 6 小时）；构建前自动清理 runner 磁盘腾出 ~50GB。构建统一带 `DOWNLOAD_MIRROR=china`（国内镜像源）。
 
