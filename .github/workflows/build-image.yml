@@ -14,40 +14,91 @@ on:
           - h96s
           - am60-sa12
           - neardi-lz200
-      branch:
-        description: "KERNEL 分支覆盖 (留空 = 用板卡 build.env 默认)"
-        required: false
-        default: ""
-        type: string
-      release:
-        description: "发行版覆盖 noble/bookworm/trixie (留空 = 默认)"
-        required: false
-        default: ""
-        type: string
-      desktop:
-        description: "BUILD_DESKTOP 覆盖 (留空 = 默认)"
-        required: false
-        default: ""
+
+      edition:
+        description: "镜像类型 (server=纯命令行 / minimal=精简命令行 / desktop=带桌面)"
         type: choice
+        required: true
+        default: default
         options:
-          - ""
-          - "yes"
-          - "no"
+          - default
+          - desktop
+          - server
+          - minimal
+
       desktop_environment:
-        description: "DESKTOP_ENVIRONMENT 覆盖 (gnome/xfce/... 留空 = 默认；armhf 板只能用 xfce/cinnamon/mate/i3-wm/enlightenment)"
+        description: "桌面环境 (仅 desktop 有效; default=用板卡默认; armhf 板只有 xfce/cinnamon/mate/lxqt/i3-wm 可用)"
+        type: choice
         required: false
-        default: ""
-        type: string
+        default: default
+        options:
+          - default
+          - gnome
+          - xfce
+          - kde-plasma
+          - cinnamon
+          - mate
+          - lxqt
+          - i3-wm
+          - budgie
+
       desktop_tier:
-        description: "DESKTOP_TIER 覆盖 (minimal/mid/full, 留空 = 默认)"
+        description: "桌面软件档位 (minimal=仅桌面 / mid=+浏览器媒体 / full=+办公开发)"
+        type: choice
+        required: false
+        default: default
+        options:
+          - default
+          - minimal
+          - mid
+          - full
+
+      kernel_branch:
+        description: "内核分支 (vendor=厂商 BSP / current / edge / legacy; default=用板卡默认)"
+        type: choice
+        required: false
+        default: default
+        options:
+          - default
+          - vendor
+          - current
+          - edge
+          - legacy
+
+      kernel_version:
+        description: "内核版本 (高级可选, 如 6.1.172; 留空=跟随分支最新; 必须是内核仓库里存在的 tag v<版本>)"
+        type: string
         required: false
         default: ""
-        type: string
+
+      release:
+        description: "发行版"
+        type: choice
+        required: false
+        default: default
+        options:
+          - default
+          - noble
+          - bookworm
+          - trixie
+          - jammy
+          - resolute
+
+      compress:
+        description: "镜像压缩格式"
+        type: choice
+        required: false
+        default: xz
+        options:
+          - xz
+          - 7z
+          - none
+
       build_ref:
-        description: "armbian/build 引用 (分支/标签, 主线是 main; master 是旧分支)"
+        description: "armbian/build 引用 (分支/标签; 主线是 main, master 是旧分支)"
+        type: string
         required: false
         default: "main"
-        type: string
 
 jobs:
   build:
@@ -76,40 +127,106 @@ jobs:
       - name: 同步板卡自定义文件 (仅该板卡, 互不干扰)
         run: bash scripts/sync-board-to-build.sh "${{ inputs.board }}" armbian-build
 
-      - name: 组装构建参数 (build.env 默认 + 手动覆盖)
+      - name: 组装构建参数 (build.env 默认 + 下拉覆盖)
         id: args
+        env:
+          BOARD_NAME: ${{ inputs.board }}
+          IN_EDITION: ${{ inputs.edition }}
+          IN_DE: ${{ inputs.desktop_environment }}
+          IN_TIER: ${{ inputs.desktop_tier }}
+          IN_KB: ${{ inputs.kernel_branch }}
+          IN_KV: ${{ inputs.kernel_version }}
+          IN_REL: ${{ inputs.release }}
+          IN_COMPRESS: ${{ inputs.compress }}
         run: |
-          set -a
+          set -euo pipefail
+
+          # ---- 1. 板卡默认值 ----
           # shellcheck disable=SC1091
-          source "boards/${{ inputs.board }}/build.env"
-          set +a
-          # 手动输入优先, 留空则用 build.env 默认
-          BRANCH="${BRANCH}"; RELEASE="${RELEASE}"; DESKTOP="${BUILD_DESKTOP}"
-          if [ -n "${{ inputs.branch }}" ]; then BRANCH="${{ inputs.branch }}"; fi
-          if [ -n "${{ inputs.release }}" ]; then RELEASE="${{ inputs.release }}"; fi
-          if [ -n "${{ inputs.desktop }}" ]; then DESKTOP="${{ inputs.desktop }}"; fi
-          ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
-          # 扩展: 为空则不传, 避免覆盖板卡 csc 里可能已有的 ENABLE_EXTENSIONS
-          if [ -n "${ENABLE_EXTENSIONS:-}" ]; then ARGS="${ARGS} ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS}"; fi
-          # 桌面环境/档位: BUILD_DESKTOP=yes 时必须显式给出, 否则 armbian 会弹
-          # dialog 选桌面(Choose a desktop environment) 和档位(Choose desktop tier),
-          # CI 无 TTY → "stdin is not a terminal. can't use dialog" → 退 43。
-          DE="${DESKTOP_ENVIRONMENT:-}"; TIER="${DESKTOP_TIER:-}"
-          if [ -n "${{ inputs.desktop_environment }}" ]; then DE="${{ inputs.desktop_environment }}"; fi
-          if [ -n "${{ inputs.desktop_tier }}" ]; then TIER="${{ inputs.desktop_tier }}"; fi
-          if [ "${DESKTOP}" = "yes" ]; then
-            if [ -z "${DE}" ]; then echo "::error::BUILD_DESKTOP=yes 但 DESKTOP_ENVIRONMENT 为空"; exit 1; fi
-            ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DE}"
-            if [ -n "${TIER}" ]; then ARGS="${ARGS} DESKTOP_TIER=${TIER}"; fi
+          set -a; source "boards/${BOARD_NAME}/build.env"; set +a
+
+          BOARD_DEF="${BOARD}"; BRANCH_DEF="${BRANCH}"; RELEASE_DEF="${RELEASE}"
+          DE_DEF="${DESKTOP_ENVIRONMENT:-}"; TIER_DEF="${DESKTOP_TIER:-}"
+          if   [ "${BUILD_DESKTOP}" = "yes" ]; then EDITION_DEF=desktop
+          elif [ "${BUILD_MINIMAL}" = "yes" ]; then EDITION_DEF=minimal
+          else                                      EDITION_DEF=server; fi
+
+          # ---- 2. 合并用户选择 (default = 跟随板卡) ----
+          pick() { [ -n "$2" ] && [ "$2" != "default" ] && printf '%s' "$2" || printf '%s' "$1"; }
+          EDITION="$(pick "${EDITION_DEF}" "${IN_EDITION}")"
+          DE="$(pick "${DE_DEF}" "${IN_DE}")"
+          TIER="$(pick "${TIER_DEF:-mid}" "${IN_TIER}")"
+          BRANCH="$(pick "${BRANCH_DEF}" "${IN_KB}")"
+          RELEASE="$(pick "${RELEASE_DEF}" "${IN_REL}")"
+
+          # ---- 3. edition -> BUILD_DESKTOP / BUILD_MINIMAL ----
+          case "${EDITION}" in
+            desktop) BUILD_DESKTOP=yes; BUILD_MINIMAL=no  ;;
+            minimal) BUILD_DESKTOP=no;  BUILD_MINIMAL=yes ;;
+            *)       BUILD_DESKTOP=no;  BUILD_MINIMAL=no  ;;
+          esac
+
+          # ---- 4. 桌面环境必填校验 + 架构兼容性校验 ----
+          if [ "${BUILD_DESKTOP}" = "yes" ]; then
+            if [ -z "${DE}" ]; then
+              echo "::error::edition=desktop 但 desktop_environment 为空(板卡 build.env 也没配)"
+              exit 1
+            fi
+            # 从板卡 csc 取 BOARDFAMILY, 再从家族配置取 ARCH (rk3288=rk35xx 家族等)
+            FAMILY=$(sed -n 's/^BOARDFAMILY=//p' "armbian-build/config/boards/${BOARD}.csc" | tr -d '"' | head -1)
+            ARCH=$(sed -n 's/^ARCH=//p' "armbian-build/config/sources/families/${FAMILY}.conf" 2>/dev/null | tr -d '"' | head -1)
+            ARCH="${ARCH:-arm64}"
+            case "${ARCH}:${DE}" in
+              armhf:gnome|armhf:kde-plasma|armhf:budgie)
+                echo "::error::${DE} 不支持 ${ARCH} (板卡 ${BOARD} / 家族 ${FAMILY}); 请改选 xfce / cinnamon / mate / lxqt / i3-wm"
+                exit 1 ;;
+            esac
+            echo "桌面: ${DE} / 档位 ${TIER} / 架构 ${ARCH}"
           fi
+
+          # ---- 5. 组装参数串 ----
+          ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE}"
+          ARGS="${ARGS} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
+          if [ "${BUILD_DESKTOP}" = "yes" ]; then
+            ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DE} DESKTOP_TIER=${TIER}"
+          fi
+          # 扩展: build.env 未设置则不传, 避免覆盖 csc 里已有的 ENABLE_EXTENSIONS
+          if [ -n "${ENABLE_EXTENSIONS:-}" ]; then
+            ARGS="${ARGS} ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS}"
+          fi
+          # 内核版本锁定 (高级): tag:v<x.y.z>
+          if [ -n "${IN_KV}" ]; then
+            ARGS="${ARGS} KERNELBRANCH=tag:v${IN_KV}"
+          fi
+          # 压缩格式
+          case "${IN_COMPRESS}" in
+            7z)   COMPRESS="sha,img,7z" ;;
+            none) COMPRESS="sha,img"    ;;
+            *)    COMPRESS="sha,img,xz" ;;
+          esac
+
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
-          echo "构建参数: ${ARGS}"
+          echo "compress=${COMPRESS}" >> "$GITHUB_OUTPUT"
+
+      - name: 构建摘要
+        run: |
+          cat <<EOF
+          ┌────────────────────────────────────────────┐
+            板卡        : ${{ inputs.board }}
+            镜像类型    : ${{ inputs.edition }}   (desktop / server / minimal)
+            桌面环境    : ${{ inputs.desktop_environment }}   档位: ${{ inputs.desktop_tier }}
+            内核分支    : ${{ inputs.kernel_branch }}   版本锁定: ${{ inputs.kernel_version }}
+            发行版      : ${{ inputs.release }}
+            压缩格式    : ${{ inputs.compress }}
+          ──────────────────────────────────────────────
+          最终参数: ${{ steps.args.outputs.args }}
+          EOF
 
       - name: 编译镜像
         run: |
           cd armbian-build
-          # main 分支的 CLI (entrypoint.sh + commands.sh) 参数顺序任意;
-          # 但保持"KEY=VALUE 在前, 目标命令 build 在后"的可读写法。
+          # main 分支 CLI (entrypoint.sh + commands.sh) 参数顺序任意;
+          # 仍保持 "KEY=VALUE 在前, 目标命令 build 在后" 的可读写法。
           # EXPERT=yes 跳过社区板(.csc)的交互确认。
           ./compile.sh \
             ${{ steps.args.outputs.args }} \
@@ -117,15 +234,15 @@ jobs:
             EXPERT=yes \
             SHARE_LOG=yes \
             DOWNLOAD_MIRROR=china \
-            COMPRESS_OUTPUTIMAGE=sha,img,xz \
+            COMPRESS_OUTPUTIMAGE=${{ steps.args.outputs.compress }} \
             build
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4
         with:
-          name: armbian-${{ inputs.board }}-${{ github.run_number }}
+          name: armbian-${{ inputs.board }}-${{ inputs.edition }}-${{ github.run_number }}
           path: |
-            armbian-build/output/images/**/*.img*.xz
+            armbian-build/output/images/**/*.img*
             armbian-build/output/images/**/*.sha
           if-no-files-found: error
           retention-days: 14
