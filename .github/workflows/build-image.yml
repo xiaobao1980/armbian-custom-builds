@@ -110,7 +110,7 @@ on:
           - ubuntu-24.04-arm
 
       publish_release:
-        description: "构建成功后发布到 GitHub Releases (类似 ophub/amlogic-s9xxx-armbian 的 Releases 页)"
+        description: "构建成功后发布到 GitHub Releases"
         type: boolean
         required: false
         default: true
