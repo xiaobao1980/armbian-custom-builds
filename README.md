@@ -25,8 +25,13 @@ boards/<board>/
 └── reference/             # 参考源文件（不参与构建同步）
 
 common/extensions/
-└── mesa-vpu.sh            # 公共扩展：vendor 内核 + GNOME 桌面启用 mesa/panthor/
-                           # rockchip-multimedia/浏览器（ENABLE_EXTENSIONS=mesa-vpu）
+├── mesa-vpu.sh            # 公共扩展：vendor 内核 + GNOME 桌面启用 mesa/panthor/
+│                          # rockchip-multimedia/浏览器（ENABLE_EXTENSIONS=mesa-vpu）
+└── rkmpp-mpv.sh           # 公共扩展：RKMPP + mpv 硬件解码 + 全局非 Wayland (X11)
+                           # （ENABLE_EXTENSIONS=rkmpp-mpv, 详见下方专节）
+
+docs/
+└── Debian_X11_RKMPP_MPV_Guide.md   # RKMPP+mpv 完整原理/手册（扩展的上游参考）
 ```
 
 ## 在线编译（GitHub Actions）
@@ -67,6 +72,30 @@ Actions 页面两个入口：
 > 🔴 **`build_ref` 必须用 `main`**（默认值已是 `main`）。armbian/build 的 `master` 是**旧分支**（老 CLI + 交互向导，CI 无 TTY 会直接退 255）；主线在 `main`。
 
 > ⚠️ **aio-3288c 注意**：其内核补丁按 `rockchip-6.18` 目录组织，要求 armbian/build 的 edge 内核仍为 6.18.x。若上游 edge 已升级（如 6.19+），请在 `build_ref` 输入中固定一个 6.18 时代的 build 引用（tag/commit）。
+
+## 公共扩展：rkmpp-mpv（RKMPP 硬解 + 全局非 Wayland）
+
+所有 **vendor 内核**的 RK3566/RK3568/RK3576/RK3588 板卡默认启用（`ENABLE_EXTENSIONS=rkmpp-mpv`，h96-m9/h96s 与 mesa-vpu 逗号连用）。完整原理见 `docs/Debian_X11_RKMPP_MPV_Guide.md`，镜像内做了四件事：
+
+1. **RKMPP 编解码栈**：chroot 内源码编译 MPP（jellyfin-mpp）+ RGA（jellyfin-rga）+ ffmpeg-rockchip，库隔离在 `/usr/local/lib/ffmpeg-rkmpp`，不污染系统 ffmpeg；
+2. **mpv wrapper**：`/usr/bin/mpv` 经 `LD_LIBRARY_PATH` 加载 rkmpp 版 libavcodec（`h264_rkmpp`/`hevc_rkmpp`/`av1_rkmpp` 硬解），另有显式命令 `mpv-rkmpp`；
+3. **全局 `/etc/mpv/mpv.conf`**：`hwdec=auto` + `vo=gpu` + `gpu-api=opengl`（X11 渲染基线，Panfrost 无 Vulkan）+ 4K 性能优化（`profile=fast`）；
+4. **全局非 Wayland**：GNOME/gdm3 写 `WaylandEnable=false`，KDE/sddm 写 `DisplayServer=x11`，另加 modesetting `TearFree` 防撕裂。
+
+板上验证：
+
+```bash
+ldd $(which mpv) | grep libavcodec     # 应指向 /usr/local/lib/ffmpeg-rkmpp/
+ffmpeg -hwaccel rkmpp -i video.mp4 -f null -   # CPU 应 < 20%
+mpv --msg-level=vd=debug video.mp4 2>&1 | grep -iE "hwdec|rkmpp"
+echo $XDG_SESSION_TYPE                  # 应为 x11
+```
+
+说明：
+- 非条件板卡（edge/current 内核、minimal、非 rk35xx/rk3588 家族）自动跳过，零副作用；
+- server 镜像（如 am60-sa12）同样编译 RKMPP 栈（供 kiosk/无人值守播放直接 `mpv` 硬解），仅跳过显示管理器配置；
+- 源码编译约 +20–40 分钟（arm64 原生 runner），**建议 x86 runner 时选 `runner=ubuntu-24.04-arm`**，qemu 模拟下编译会慢数倍；
+- 调试时可传 `RKMPP_MPV_SKIP_BUILD=yes` 跳过编译，只装 mpv + 写配置（软解基线排查用）。
 
 ## 本地编译
 
