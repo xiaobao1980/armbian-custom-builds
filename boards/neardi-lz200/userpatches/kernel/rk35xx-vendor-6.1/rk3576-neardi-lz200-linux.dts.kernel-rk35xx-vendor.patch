@@ -1021,7 +1021,7 @@ index 000000000000..90bc05995653
 +	status = "disabled";
 +};
 +
-+&hdptxphy_hdmi {
++&hdptxphy {
 +	status = "okay";
 +};
 +
@@ -1763,7 +1763,7 @@ index 000000000000..1e83a4419da9
 +};
 +
 +&display_subsystem {
-+	clocks = <&hdptxphy_hdmi>;
++	clocks = <&hdptxphy>;
 +	clock-names = "hdmi0_phy_pll";
 +};
 +
