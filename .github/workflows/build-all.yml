@@ -13,6 +13,11 @@ on:
         required: false
         default: ""
         type: string
+      publish_release:
+        description: "构建成功后发布到 GitHub Releases (每板卡一个 tag)"
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   matrix:
@@ -34,6 +39,8 @@ jobs:
     needs: matrix
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      contents: write    # 发布 Release 需要
     strategy:
       fail-fast: false
       matrix:
@@ -116,6 +123,72 @@ jobs:
             armbian-build/output/images/**/*.sha
           if-no-files-found: error
           retention-days: 14
+
+      - name: 发布镜像到 GitHub Releases
+        if: ${{ success() && inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOARD_NAME: ${{ matrix.board }}
+          BUILD_ARGS: ${{ steps.args.outputs.args }}
+        run: |
+          set -euo pipefail
+          DATE_TAG="$(date -u +%Y%m%d)"
+          TAG="${BOARD_NAME}-${DATE_TAG}"
+          IMG_DIR="armbian-build/output/images"
+
+          # GitHub Release 单文件上限 2GiB; 超限文件仅留在 Artifacts
+          ASSETS=()
+          shopt -s nullglob
+          for f in "${IMG_DIR}"/*; do
+            sz=$(stat -c%s "$f")
+            if [ "$sz" -gt 2147483648 ]; then
+              echo "::warning::$(basename "$f") $(numfmt --to=iec "$sz") 超过 2GiB, 不进 Release (仅 Artifacts)"
+              continue
+            fi
+            ASSETS+=("$f")
+          done
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "::error::没有可发布的镜像文件"
+            exit 1
+          fi
+
+          SHAS=""
+          for f in "${ASSETS[@]}"; do
+            case "$f" in *.img*) SHAS+="$(basename "$f")  $(awk '{print $1}' "$f.sha" 2>/dev/null || sha256sum "$f" | awk '{print $1}')\n" ;; esac
+          done
+
+          NOTES="## Armbian 镜像 — ${BOARD_NAME}
+
+          | 项 | 值 |
+          |---|---|
+          | 板卡 | ${BOARD_NAME} |
+          | 构建参数 | \`${BUILD_ARGS}\` |
+          | armbian/build 引用 | ${{ inputs.build_ref }} |
+          | 构建时间 (UTC) | $(date -u '+%Y-%m-%d %H:%M') |
+
+          ### 烧写
+          \`\`\`bash
+          xzcat *.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
+          # 或 balenaEtcher 直接烧 .img.xz
+          \`\`\`
+
+          ### 校验
+          \`\`\`
+          ${SHAS}
+          \`\`\`
+          [构建日志](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          "
+
+          if gh release view "${TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release ${TAG} 已存在, 追加/覆盖资产"
+            gh release upload "${TAG}" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "${TAG}" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Armbian ${BOARD_NAME} ${DATE_TAG}" \
+              --notes "${NOTES}"
+          fi
+          echo "Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
       - name: 上传构建日志 (失败时)
         if: failure()

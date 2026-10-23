@@ -54,6 +54,16 @@ Actions 页面两个入口：
 
 免费 runner 单次构建约 1.5–3 小时（限 6 小时）；构建前自动清理 runner 磁盘腾出 ~50GB。构建统一带 `DOWNLOAD_MIRROR=china`（国内镜像源）。
 
+### 镜像发布（GitHub Releases）
+
+构建成功后自动把镜像发布到 [Releases](../../releases) 页（类似 ophub/amlogic-s9xxx-armbian），**长期可下载，不随 Artifacts 过期**：
+
+- 单板 / 矩阵 workflow 均有 `publish_release` 开关（默认开）
+- tag 规则：`<board>-<yyyymmdd>`（如 `h96s-20261023`）；同日重跑会 **clobber 覆盖**同名资产
+- 附件：`*.img.xz` + `.sha` 校验 + 构建参数/烧写命令写在 Release Notes
+- ⚠️ GitHub Release **单文件上限 2GiB**；超限文件（如 compress=none 的 6GB 裸 img）自动跳过、仅留 Artifacts
+- Actions Artifacts 仍并行保留 14 天，作为大文件/失败日志的兜底
+
 > 🔴 **`build_ref` 必须用 `main`**（默认值已是 `main`）。armbian/build 的 `master` 是**旧分支**（老 CLI + 交互向导，CI 无 TTY 会直接退 255）；主线在 `main`。
 
 > ⚠️ **aio-3288c 注意**：其内核补丁按 `rockchip-6.18` 目录组织，要求 armbian/build 的 edge 内核仍为 6.18.x。若上游 edge 已升级（如 6.19+），请在 `build_ref` 输入中固定一个 6.18 时代的 build 引用（tag/commit）。
