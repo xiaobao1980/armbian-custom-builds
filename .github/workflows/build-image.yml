@@ -85,7 +85,13 @@ jobs:
       - name: 安装构建依赖 (compile.sh requirements)
         run: |
           cd armbian-build
-          sudo ./compile.sh requirements
+          # 必须把 BOARD/BRANCH/RELEASE/BUILD_DESKTOP 一起传入:
+          # armbian 的交互式询问函数都是"变量已设置就 return 0", 不传会弹 dialog,
+          # CI 无 TTY → "cannot open tty-output" → "No option selected" 退 255。
+          sudo ./compile.sh requirements \
+            ${{ steps.args.outputs.args }} \
+            KERNEL_CONFIGURE=no \
+            EXPERT=yes
           # requirements 会以 root 生成缓存目录, 交还给当前用户避免后续非 root 构建失败
           sudo chown -R "${USER}:${USER}" .
 

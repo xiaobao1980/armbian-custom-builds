@@ -71,7 +71,10 @@ jobs:
       - name: 安装构建依赖 (compile.sh requirements)
         run: |
           cd armbian-build
-          sudo ./compile.sh requirements
+          sudo ./compile.sh requirements \
+            ${{ steps.args.outputs.args }} \
+            KERNEL_CONFIGURE=no \
+            EXPERT=yes
           sudo chown -R "${USER}:${USER}" .
 
       - name: 编译镜像
