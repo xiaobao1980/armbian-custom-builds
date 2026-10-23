@@ -1,0 +1,22 @@
+[Unit]
+Description=H96 M9 (RK3576) VPU codec capability declaration (V4L2 VDA/VEA)
+Documentation=https://github.com/rockchip-linux/mpp
+# 依赖说明：
+#  - systemd-udev-settle：等 udev 处理完 mpp_service 事件。PPA 的
+#    99-rk-device-permissions.rules 就是在这时把 /dev/mpp_service 从
+#    crw------- root root 改成 crw-rw---- root video（否则桌面会话的
+#    普通用户打不开 VPU），并调用 create-chromium-vda-vea-devices.sh
+#    生成 /dev/video-dec0。本服务必须在那之后跑，才能覆盖它的兜底内容。
+#  - graphical.target：要在显示管理器/浏览器启动前完成能力声明。
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=graphical.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/h96-m9-vpu-codecs.sh
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

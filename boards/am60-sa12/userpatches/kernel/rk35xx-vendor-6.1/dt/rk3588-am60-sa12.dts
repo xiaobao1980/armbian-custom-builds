@@ -1,0 +1,1690 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * CVTE SA12 / AM60 —— 80-pin OPS 模块，插在 TCL IFP86X60M 交互平板
+ *
+ * 目标内核：Armbian linux-rockchip @ branch rk-6.1-rkr7.2（vendor）
+ * 部署路径：patch/kernel/rk35xx-vendor-6.1/dt/rk3588-am60-sa12.dts
+ *           （dts-directories 自动拷贝 + 自动补 Makefile，无需手写 patch）
+ *
+ * 本文件基于 vendor 树中已有的 rk3588-smart-am60.dts（SRO SMART-AM60）改写，
+ * 二者是同一款 OPS 硬件：bootargs 里的 earlycon=uart8250,mmio32,0xfeb50000、
+ * irqchip.gicv3_pseudo_nmi=0 与实机 cmdline 完全一致；it6621@4f (HDMI-RX)、
+ * pcie2x1l0=RTL8168、pcie2x1l2=AP6276P(BCM43756)、i2c0 rk8602@42/rk8603@43 也都能对上。
+ *
+ * 相对上游的改动：
+ *   1. rk3588-android.dtsi -> rk3588-linux.dtsi（Armbian 是 Linux 用户态）
+ *   2. model / compatible 改成 CVTE SA12，同时保留 "sro,smart-am60" 兜底匹配
+ *   3. 删掉板级 chosen（改由 rk3588-linux.dtsi 提供，含 earlycon + ttyFIQ0）
+ *   4. 去掉重复的 rk3588s.dtsi（rk3588.dtsi 已经包含它）
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/leds/common.h>
+#include <dt-bindings/pwm/pwm.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include <dt-bindings/input/rk-input.h>
+#include <dt-bindings/display/drm_mipi_dsi.h>
+#include <dt-bindings/display/rockchip_vop.h>
+#include <dt-bindings/sensor-dev.h>
+#include <dt-bindings/usb/pd.h>
+#include "rk3588.dtsi"
+#include "rk3588-rk806-single.dtsi"
+#include "rk3588-linux.dtsi"
+
+/ {
+	model = "CVTE SA12 AM60 OPS (RK3588)";
+	compatible = "cvte,sa12", "sro,smart-am60", "rockchip,rk3588";
+
+	/*
+	 * 覆盖 rk3588-linux.dtsi 的 chosen/bootargs。
+	 * 上游那条带 root=PARTUUID=614e0000-0000 —— 是 SMART-AM60 原厂 Android 分区的
+	 * PARTUUID，我们的 Armbian 镜像是全新 GPT、PARTUUID 随机，根本对不上，
+	 * 内核拿着错误的 root= 死等，串口就一直刷 "Waiting for root file system"。
+	 * 这里只去掉 root=/rootwait，保留 earlycon + console；root 交给 U-Boot 的
+	 * boot.scr 传（armbianEnv.txt 里 rootdev=UUID=...）。
+	 * 注意：不要写 /delete-node/ chosen; —— 会连 earlycon 一起丢，早期日志全没。
+	 */
+	chosen {
+		bootargs = "earlycon=uart8250,mmio32,0xfeb50000 console=ttyFIQ0 irqchip.gicv3_pseudo_nmi=0 rcupdate.rcu_expedited=1 rcu_nocbs=all";
+	};
+
+	aliases {
+		mmc0 = &sdhci;
+		mmc1 = &sdmmc;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+
+		sys_led: led-0 {
+			// green led: gpios = <0x183 0x04 0x00>;
+			gpios = <&gpio1 RK_PA4 GPIO_ACTIVE_HIGH>;
+			label = "system-led";
+			linux,default-trigger = "heartbeat";
+			default-state = "on";
+			pinctrl-0 = <&sys_led_pin>;
+		};
+
+		usr_led: led-1 {
+			// red led : gpios = <0x123 0x13 0x00>;
+			gpios = <&gpio0 RK_PC3 GPIO_ACTIVE_HIGH>;
+			label = "user-led";
+			pinctrl-0 = <&usr_led_pin>;
+		};
+	};
+
+	vcc12v_dcin: vcc12v-dcin{
+		compatible = "regulator-fixed";
+		regulator-name = "vcc12v_dcin";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <12000000>;
+		regulator-max-microvolt = <12000000>;
+	}; // ok
+
+	/* vcc5v0_sys powers peripherals */
+	vcc5v0_sys: vcc5v0-sys {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc12v_dcin>;
+	}; // ok
+
+	vcc5v0_usb: vcc5v0-usb {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_usb";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <0x4c4b40>;
+		regulator-max-microvolt = <0x4c4b40>;
+		vin-supply = <&vcc12v_dcin>;
+	};	// ok
+
+	vcc_1v1_nldo_s3: vcc-1v1-nldo-s3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc-1v1-nldo-s3";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <1100000>;
+		regulator-max-microvolt = <1100000>;
+		vin-supply = <&vcc5v0_sys>;
+	};	// ok
+
+	vbus5v0_typec: vbus5v0-typec {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		// [2026-09-14 修正] 曾误加 regulator-always-on + regulator-boot-on（想强制 VBUS
+		// 常开 5V）。但 TCPM 源码 drivers/usb/typec/tcpm/tcpm.c 的
+		// SRC_ATTACH_WAIT -> SRC_ATTACHED 转移硬性要求 port->vbus_vsafe0v 为真
+		//（即 VBUS 必须处于安全 0V），否则状态机永远卡在 SRC_ATTACH_WAIT，
+		// et7303_set_vbus 永不被调用 -> 无 partner / 不出图 / 不枚举外设。
+		// Android 真值源 tree-c.dts.txt:6702 此节点【无】always-on/boot-on，由
+		// et7303 驱动在 attach 时 regulator_enable 动态上电。故删除常开，回归与 Android 一致。
+		// (gpio4 PB6 / 真值源 <0x04 0x0e 0x00 0x17c>)
+		// gpio = <0xe3 0x0e 0x00>;
+		gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&typec5v_pwren>;
+		regulator-name = "vcc5v0_typec";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc5v0_usb>;
+	};	// ok
+
+	vcc3v3_pcie2x1l2: vcc3v3-pcie2x1l2 {	// wifi
+		compatible = "regulator-fixed";
+		// 真值源 tree-c.dts.txt:9013 → gpios=<0x13c 0x00 0x00>，0x13c=fd8a0000=**gpio0**
+		// （0xfe 才是 fec40000=gpio3；旧注释曾误称 0x13c=fec40000，已纠正）。
+		enable-active-high;
+		gpios = <&gpio0 RK_PA0 GPIO_ACTIVE_HIGH>;
+		regulator-name = "vcc3v3_pcie2x1l2";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		startup-delay-us = <5000>;
+		vin-supply = <&vcc12v_dcin>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_en_gpio>;
+	};	// ok
+
+	vcc3v3_pcie2x1l0: vcc3v3-pcie2x1l0 {	// ethernet
+		compatible = "regulator-fixed";
+		// 真值源 tree-c.dts.txt:9756 → gpios=<0x13c 0x0f 0x00>=gpio0 PB7
+		// （0x13c=fd8a0000=gpio0；0xfe 才是 fec40000=gpio3）。
+		gpios = <&gpio0 RK_PB7 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-name = "vcc3v3_pcie2x1l0";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		startup-delay-us = <5000>;
+		vin-supply = <&vcc12v_dcin>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&rtl8111_poweren>;
+	}; // ok
+
+	vcc_sd: sdmmc-regulator {
+		compatible = "regulator-fixed";
+		//gpio = <0x123 0x04 0x01>;
+		gpios = <&gpio0 RK_PA4 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sdmmc_pwr>;
+		regulator-name = "vcc_sd";
+		regulator-min-microvolt = <0x325aa0>;
+		regulator-max-microvolt = <0x325aa0>;
+		startup-delay-us = <0x186a0>;
+		vin-supply = <&vcc5v0_sys>;
+	};
+
+	sw_gpio: sw-gpio {
+		compatible = "regulator-fixed";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gpio_wol_en &gpio_pc_in_det &gpio_usb30_b_ocp_det &gpio_wifi_wake &gpio_6621_rst>;
+		regulator-name = "vcc-phy";
+		regulator-always-on;
+	};//
+
+	wireless_bluetooth: wireless-bluetooth {
+		compatible = "bluetooth-platdata";
+		// uart_rts_gpios = <0xe5 0x14 0x01>;
+		uart_rts_gpios = <&gpio4 RK_PC4 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		// 修：去掉 rts_gpio 第二态（pinctrl-1 = <&uart9_gpios>）。vendor DTS 也有这个
+		// uart9-gpios 子节点（gpio4 PC4 mux=GPIO），但 vendor kernel 容忍 mainline 不容忍——
+		// dmesg 报 "pin gpio4-20 already requested by febc0000.serial; cannot claim for
+		// wireless-bluetooth"，BT pinctrl 抢不到脚，hciattach 起不来。
+		pinctrl-0 = <&uart9m0_rtsn>, <&bt_reset_gpio>;
+		// BT,reset_gpio = <0x12f 0x08 0x01>;
+		BT,reset_gpio = <&gpio0 RK_PB0 GPIO_ACTIVE_LOW>;
+		// 修正：上一版(Android/tree-a、vendor rk3588-smart-am60)此节点 status=okay，
+		// BT 走 uart9（uart9m0，ttyS9）。原 disabled 导致蓝牙完全不初始化。
+		status = "okay";
+	};	// ok
+
+	wireless_wlan: wireless-wlan {
+		compatible = "wlan-platdata";
+		// 真值：板载 AP6276P(BCM43756)。三重证据一致——
+		// ① PCIe DID 14e4:44a0；② dmesg chip=0xaaec(=43756)；③ 本地 nvram 标 AP6276P_V02/CVTE。
+		// 之前误标 ap6275p 并用 43752 固件软链冒充 43756 名，导致 bcmdhd 把 43752 固件
+		// 下载进 43756 芯片 → dongle 起不来(Failed to find CA7 core)。
+		// 改回 ap6276p：bcmdhd 去 /lib/firmware/ap6276p/ 取真实 43756 固件
+		// (fw_syn43756b0_pcie.bin + nvram_ap6276p.txt + clm_syn43756b0.blob)。
+		wifi_chip_type = "ap6276p";
+		status = "okay";
+	};
+
+	it6621_sound: it6621-sound {
+		status = "okay";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <0x80>;
+		simple-audio-card,name = "it6621";
+
+		simple-audio-card,cpu {
+			sound-dai = <&spdif_tx0>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&it6621>;
+		};
+	};
+
+	hdmi0_sound: hdmi0-sound {
+		status = "okay";
+		compatible = "rockchip,hdmi";
+		rockchip,mclk-fs = <128>;
+		rockchip,card-name = "rockchip-hdmi0";
+		rockchip,cpu = <&i2s5_8ch>;
+		rockchip,codec = <&hdmi0>;
+		rockchip,jack-det;
+	};	// ok
+
+	hdmi1_sound: hdmi1-sound {
+		status = "okay";
+		compatible = "rockchip,hdmi";
+		rockchip,mclk-fs = <128>;
+		rockchip,card-name = "rockchip-hdmi1";
+		rockchip,cpu = <&i2s6_8ch>;
+		rockchip,codec = <&hdmi1>;
+		rockchip,jack-det;
+	};
+
+	dp0_sound: dp0-sound {
+		status = "okay";
+		compatible = "rockchip,hdmi";
+		rockchip,card-name = "rockchip-dp0";
+		rockchip,mclk-fs = <512>;
+		rockchip,cpu = <&spdif_tx2>;
+		rockchip,codec = <&dp0 1>;
+		rockchip,jack-det;
+	};
+
+	/* If hdmirx node is disabled, delete the reserved-memory node here. */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Reserve 256MB memory for hdmirx-controller@fdee0000 */
+		cma {
+			compatible = "shared-dma-pool";
+			reusable;
+			reg = <0x0 (256 * 0x100000) 0x0 (256 * 0x100000)>;
+			linux,cma-default;
+		};
+	};	// ok
+
+	hdmiin-sound {
+		compatible = "rockchip,hdmi";
+		rockchip,mclk-fs = <128>;
+		rockchip,format = "i2s";
+		rockchip,bitclock-master = <&hdmirx_ctrler>;
+		rockchip,frame-master = <&hdmirx_ctrler>;
+		rockchip,card-name = "rockchip-hdmiin";
+		rockchip,cpu = <&i2s7_8ch>;
+		rockchip,codec = <&hdmirx_ctrler 0>;
+		rockchip,jack-det;
+	};
+
+	/* === 3.5mm 出声方案状态（2026-09-11）===
+	 * 当前 v6：ms4344 用 rockchip,dummy-codec 占位，声卡能注册但 3.5mm 实听无声
+	 *   —— dummy 不会真出声，这是已知限制，非 bug。
+	 * A 方案（SoC 内部 ACODEC / acdcdig_dsm + i2s3_2ch + PWM 输出）已调研但 SHELVED：
+	 *   仅启用 &acdcdig_dsm { status="okay" }（v7a 变更）即导致内核启动早期 hang
+	 *   （串口 Starting kernel ... 后无输出），实测 v7 / v7a 两次均需重刷 eMMC 恢复。
+	 *   根因未定位（疑似 auddsm_pins PA1-PA4 抢 pin 或 RK3588_PD_AUDIO 电源域死锁）。
+	 *   下方 acdcdig_dsm 启用块已注释保留供后续内核级修复参考，切勿未经验证直接启用。 */
+	ms4344_dac_sound: ms4344-dac-sound {
+		status = "okay";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "rockchip,ms4344";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,cpu {
+			sound-dai = <&i2s1_8ch>;
+		};
+		simple-audio-card,codec {
+			sound-dai = <&ms4344>;
+		};
+	};
+
+	ms4344: ms4344-dac {
+		compatible = "rockchip,dummy-codec";
+		#sound-dai-cells = <0>;
+	};
+
+	es7243_adc_linein_sound: es7243-adc-linein-sound {
+		status = "okay";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "rockchip,es7243";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,cpu {
+			sound-dai = <&i2s2_2ch>;
+		};
+		simple-audio-card,codec {
+			sound-dai = <&es7243_line_in>;
+		};
+	};
+
+	fan0: pwm-fan {
+		compatible = "pwm-fan";
+		#cooling-cells = <2>;
+		cooling-levels = <72 94 117 139 162 184 207 229 255>;
+		pwms = <&pwm1 0 10000 0>;
+	};
+
+	test-power {
+		status = "okay";
+	};
+
+};
+
+&av1d {
+	status = "okay";
+};
+
+&av1d_mmu {
+	status = "okay";
+};
+
+/*
+ * === SHELVED：SoC 内部 ACODEC (acdcdig_dsm) 启用 ===
+ * 警告：仅下面这一句 status="okay" 就会导致内核启动早期 hang
+ *   （v7 / v7a 实测：串口 Starting kernel ... 后无任何输出，两次均需重刷 eMMC 恢复）。
+ * 根因未定位 —— 不要直接取消注释启用，需先在内核驱动层（rk_codec_digital.c /
+ *   auddsm_pins / RK3588_PD_AUDIO 电源域）排查，或抓串口 panic 日志定位。
+ * 若日后启用，还需配套：&i2s3_2ch 启用但不配外部 pinctrl（数据走 SoC 内部通道），
+ *   否则 auddsm_pins (PA1-PA4 func 4) 与 i2s3_sdi/sdo (PA3/PA4 func 3) 物理复用撞 pin。
+ */
+/*
+&acdcdig_dsm {
+	status = "okay";
+};
+*/
+
+&cpu_l0 {
+	cpu-supply = <&vdd_cpu_lit_s0>;
+	mem-supply = <&vdd_cpu_lit_mem_s0>;
+};
+
+&cpu_b0 {
+	cpu-supply = <&vdd_cpu_big0_s0>;
+	mem-supply = <&vdd_cpu_big0_mem_s0>;
+};
+
+&cpu_b2 {
+	cpu-supply = <&vdd_cpu_big1_s0>;
+	mem-supply = <&vdd_cpu_big1_mem_s0>;
+};
+
+&gpu {
+	mali-supply = <&vdd_gpu_s0>;
+	mem-supply = <&vdd_gpu_mem_s0>;
+	upthreshold = <60>;
+	downdifferential = <30>;
+	status = "okay";
+};
+
+&rknpu {
+	rknpu-supply = <&vdd_npu_s0>;
+	mem-supply = <&vdd_npu_mem_s0>;
+	status = "okay";
+};
+
+&rknpu_mmu {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0m2_xfer>;
+
+	vdd_cpu_big0_s0: vdd_cpu_big0_mem_s0: rk8602@42 {
+		compatible = "rockchip,rk8602";
+		reg = <0x42>;
+		vin-supply = <&vcc5v0_sys>;
+		regulator-compatible = "rk860x-reg";
+		regulator-name = "vdd_cpu_big0_s0";
+		regulator-min-microvolt = <550000>;
+		regulator-max-microvolt = <1050000>;
+		regulator-ramp-delay = <2300>;
+		rockchip,suspend-voltage-selector = <1>;
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
+
+	vdd_cpu_big1_s0: vdd_cpu_big1_mem_s0: rk8603@43 {
+		compatible = "rockchip,rk8603";
+		reg = <0x43>;
+		vin-supply = <&vcc5v0_sys>;
+		regulator-compatible = "rk860x-reg";
+		regulator-name = "vdd_cpu_big1_s0";
+		regulator-min-microvolt = <550000>;
+		regulator-max-microvolt = <1050000>;
+		regulator-ramp-delay = <2300>;
+		rockchip,suspend-voltage-selector = <1>;
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
+};	// ok
+
+&dmc {
+	center-supply = <&vdd_ddr_s0>;
+	mem-supply = <&vdd_log_s0>;
+	status = "okay";
+};
+
+&dfi {
+	status = "okay";
+};
+
+&i2c1 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c1m2_xfer>;
+
+	vdd_npu_s0: vdd_npu_mem_s0: rk8602@42 {
+		compatible = "rockchip,rk8602";
+		reg = <0x42>;
+		vin-supply = <&vcc5v0_sys>;
+		regulator-compatible = "rk860x-reg";
+		regulator-name = "vdd_npu_s0";
+		regulator-min-microvolt = <550000>;
+		regulator-max-microvolt = <950000>;
+		regulator-ramp-delay = <2300>;
+		rockchip,suspend-voltage-selector = <1>;
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
+};	// ok
+
+&iep {
+	status = "okay";
+};
+
+&iep_mmu {
+	status = "okay";
+};
+
+&jpegd {
+	status = "okay";
+};
+
+&jpegd_mmu {
+	status = "okay";
+};
+
+&jpege_ccu {
+	status = "okay";
+};
+
+&jpege0 {
+	status = "okay";
+};
+
+&jpege0_mmu {
+	status = "okay";
+};
+
+&jpege1 {
+	status = "okay";
+};
+
+&jpege1_mmu {
+	status = "okay";
+};
+
+&jpege2 {
+	status = "okay";
+};
+
+&jpege2_mmu {
+	status = "okay";
+};
+
+&jpege3 {
+	status = "okay";
+};
+
+&jpege3_mmu {
+	status = "okay";
+};
+
+&vdpu {
+	status = "okay";
+};
+
+&vdpu_mmu {
+	status = "okay";
+};
+
+&mpp_srv {
+	status = "okay";
+};
+
+&rga3_core0 {
+	status = "okay";
+};
+
+&rga3_0_mmu {
+	status = "okay";
+};
+
+&rga3_core1 {
+	status = "okay";
+};
+
+&rga3_1_mmu {
+	status = "okay";
+};
+
+&rga2 {
+	status = "okay";
+};
+
+&rkvdec_ccu {
+	status = "okay";
+};
+
+&rkvdec0 {
+	status = "okay";
+};
+
+&rkvdec0_mmu {
+	status = "okay";
+};
+
+&rkvdec1 {
+	status = "okay";
+};
+
+&rkvdec1_mmu {
+	status = "okay";
+};
+
+&rkvenc_ccu {
+	status = "okay";
+};
+
+&rkvenc0 {
+	status = "okay";
+};
+
+&rkvenc0_mmu {
+	status = "okay";
+};
+
+&rkvenc1 {
+	status = "okay";
+};
+
+&rkvenc1_mmu {
+	status = "okay";
+};
+
+&saradc {
+	vref-supply = <&avcc_1v8_s0>;
+	status = "okay";
+};
+
+&sdhci {
+	bus-width = <8>;
+	no-sdio;
+	no-sd;
+	non-removable;
+	max-frequency = <200000000>;
+	mmc-hs400-1_8v;
+	mmc-hs400-enhanced-strobe;
+	status = "okay";
+};
+
+&sdmmc {
+	max-frequency = <200000000>;
+	no-sdio;
+	no-mmc;
+	bus-width = <4>;
+	cap-mmc-highspeed;
+	cap-sd-highspeed;
+	disable-wp;
+	sd-uhs-sdr104;
+	vmmc-supply = <&vcc_sd>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc_bus4 &sdmmc_clk &sdmmc_cmd &sdmmc_det>;
+	status = "okay";
+};
+
+&sdio {
+	status = "disabled";
+};
+
+&soc_thermal {
+	polling-delay = <1000>;
+	polling-delay-passive = <2000>;
+	trips {
+		trip0: trip-point@0 {
+			temperature = <45000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+		trip1: trip-point@1 {
+			temperature = <50000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+		trip2: trip-point@2 {
+			temperature = <55000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+		trip3: trip-point@3 {
+			temperature = <60000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+		trip4: trip-point@4 {
+			temperature = <65000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+		trip5: trip-point@5 {
+			temperature = <70000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+		trip6: trip-point@6 {
+			temperature = <75000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+		pcritical: trip-point@7 {
+			temperature = <80000>;
+			hysteresis = <1000>;
+			type = "active";
+		};
+	};
+	cooling-maps {
+		map0 {
+			trip = <&trip0>;
+			cooling-device = <&fan0 0 1>;
+			contribution = <1024>;
+		};
+		map1 {
+			trip = <&trip1>;
+			cooling-device = <&fan0 1 2>;
+			contribution = <1024>;
+		};
+		map2 {
+			trip = <&trip2>;
+			cooling-device = <&fan0 2 3>;
+			contribution = <1024>;
+		};
+		map3 {
+			trip = <&trip3>;
+			cooling-device = <&fan0 3 4>;
+			contribution = <1024>;
+		};
+		map4 {
+			trip = <&trip4>;
+			cooling-device = <&fan0 4 5>;
+			contribution = <1024>;
+		};
+		map5 {
+			trip = <&trip5>;
+			cooling-device = <&fan0 5 6>;
+			contribution = <1024>;
+		};
+		map6 {
+			trip = <&trip6>;
+			cooling-device = <&fan0 6 7>;
+			contribution = <1024>;
+		};
+		map7 {
+			trip = <&pcritical>;
+			cooling-device = <&fan0 7 8>;
+			contribution = <1024>;
+		};
+	};
+};
+
+&tsadc {
+	status = "okay";
+};
+
+&display_subsystem {
+	clocks = <&hdptxphy0 &hdptxphy1>;
+	clock-names =  "hdmi0_phy_pll" , "hdmi1_phy_pll";
+
+	route {
+		/*
+		 * 内置 4K 屏走 HDMI0(fde80000)，必须开这条 route，否则有控制器没画面。
+		 * connect 要和 &hdmi0_in_vpX 对上：本板 hdmi0_in_vp1 = okay，
+		 * 所以这里连 vp1_out_hdmi0（不是常见的 vp0_out_hdmi0）。
+		 */
+		route_hdmi0: route-hdmi0 {
+			status = "okay";
+			logo,uboot = "boot.bmp";
+			logo,kernel = "boot-desktop.png";
+			logo,mode = "center";
+			charge_logo,mode = "center";
+			connect = <&vp1_out_hdmi0>;
+		};
+
+		/* OPS 外接 HDMI 口（fdea0000），hdmi1_in_vp0 = okay */
+		route_hdmi1: route-hdmi1 {
+			status = "okay";
+			logo,uboot = "boot.bmp";
+			logo,kernel = "boot-desktop.png";
+			logo,mode = "center";
+			charge_logo,mode = "center";
+			connect = <&vp0_out_hdmi1>;
+		};
+	};
+};
+
+&hdptxphy0 {
+	status = "okay";
+};
+
+&hdptxphy1 {
+	status = "okay";
+};
+
+&hdmi0 {
+	status = "okay";
+	cec-enable = "true";
+	// enable-gpios = <0xe5 0x09 0x00>;
+	enable-gpios = <&gpio4 RK_PB1 GPIO_ACTIVE_HIGH>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&hdmim0_tx0_cec &hdmim0_tx0_hpd &hdmim0_tx0_scl &hdmim0_tx0_sda>;
+};
+
+&hdmi0_in_vp0 {
+	status = "disabled";
+};
+
+&hdmi0_in_vp1 {
+	status = "okay";
+};
+
+&hdmi0_in_vp2 {
+	status = "disabled";
+};
+
+&hdmi1 {
+	status = "okay";
+	// 真值源 tree-c.dts.txt: hdmi@fdea0000 的 pinctrl = hdmim2_tx1_cec(mux2/gpio3-20)
+	//   + hdmim0_tx1_hpd(mux0/gpio1-6) + hdmim1_tx1_scl(mux1/gpio3-22)
+	//   + hdmim1_tx1_sda(mux1/gpio3-21)。原 all-mux0 写法(mux0 cec/scl/sda 占 gpio2-12/13/20)
+	//   与本板 febc0000/feba0000 串口抢脚 → hdmi1 probe 直接 abort、连连接器都不注册，必须避免。
+	// enable-gpios 已移除：dw_hdmi_qp 驱动只在 encoder_enable 才拉高 enable 脚(gpio4 PB2)，
+	//   而 encoder_enable 又依赖 HPD 已连接 → 死锁(无5V→无HPD→不enable→无HPD)。
+	//   改由下方 &gpio4 的 hdmi1-enable-hog 在启动早期把 PB2 拉高，彻底解开死锁。
+	cec-enable;
+	pinctrl-names = "default";
+	pinctrl-0 = <&hdmim2_tx1_cec &hdmim0_tx1_hpd &hdmim1_tx1_scl &hdmim1_tx1_sda>;
+};
+
+/* HDMI1 5V / 电平转换使能：用 gpio-hog 在启动早期(远早于 dw_hdmi_qp 驱动 probe)
+ * 把 gpio4 PB2 拉高。原因：本板 PB2 门控 RK3588 与 IFP 大屏之间的 HDMI 通道；
+ * 若交由驱动在 encoder_enable 才拉高，会因"无HPD→不连→不enable→无HPD"死锁，
+ * 导致大屏始终无视频信号。此处 hog 常高即可（本板 HDMI 走标准 TMDS，无需 FRL 拉低）。 */
+&gpio4 {
+	hdmi1-enable-hog {
+		gpio-hog;
+		gpios = <RK_PB2 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+};
+
+&hdmi1_in_vp0 {
+	status = "okay";
+};
+
+&hdmi1_in_vp1 {
+	status = "disabled";
+};
+
+&hdmi1_in_vp2 {
+	status = "disabled";
+};
+
+/* Should work with at least 128MB cma reserved above. */
+&hdmirx_ctrler {
+	status = "okay";
+
+	#sound-dai-cells = <1>;
+	/* Effective level used to trigger HPD: 0-low, 1-high */
+	hpd-trigger-level = <1>;
+	// hdmirx-hpd-gpios = <0xe3 0x04 0x00>;
+	hdmirx-hpd-gpios = <&gpio4 RK_PA4 GPIO_ACTIVE_HIGH>;
+	// hdmirx-det-gpios = <0x183 0x1d 0x01>;
+	hdmirx-det-gpios = <&gpio1 RK_PD5 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&hdmim1_rx_cec &hdmim1_rx_hpdin &hdmim1_rx_scl &hdmim1_rx_sda &hdmirx_det>;
+	pinctrl-names = "default";
+};
+
+&i2s5_8ch {
+	status = "okay";
+};
+
+&i2s6_8ch {
+	status = "okay";
+};
+
+&i2s7_8ch {
+	status = "okay";
+};
+
+/* 模拟音频所用 I2S（原厂 platform-devices: i2s1-codec=ms4344, i2s2-codec=es7243）。
+ * B 修复 v1 改动（切 i2s1m1）会让 pcie2x1l2 节点编译时丢失，导致有线 PCIe 网卡
+ * 不出现；v4 修复（fiq_debugger 改 uart2m2）也会触发同样问题。这里回退到 dtsi 默认
+ * 状态，等定位 v1/v2/v4 三个改动哪个触发 pcie2x1l2 丢失再做局部修复。
+ */
+&i2s1_8ch {
+	status = "okay";
+};
+
+&i2s2_2ch {
+	status = "okay";
+};
+
+// FIQ debugger 节点使用 dtsi 默认配置（uart2m0_xfer on PB5+PB6）
+
+/* es7243 ADC（i2c3 @0x10 / @0x13）：原厂挂在 i2c3 总线，必须放在 i2c 节点下，
+ * 否则内核找不到 i2c 父节点 → es7243 不 probe → es7243_adc_linein_sound deferred。 */
+&i2c3 {
+	status = "okay";
+	es7243_line_in: es7243-line-in@10 {
+		compatible = "ES7243E_MicArray_0";
+		reg = <0x10>;
+		#sound-dai-cells = <0>;
+	};
+	es7243_mic_in: es7243-mic-in@13 {
+		compatible = "ES7243E_MicArray_1";
+		reg = <0x13>;
+		#sound-dai-cells = <0>;
+	};
+};
+
+&vop {
+	vop-supply = <&vdd_log_s0>;
+	support-multi-area;
+	status = "okay";
+};
+
+/* i2c5 (fead0000) 节点 —— 真正根因：原 pinctrl-0 = i2c5m2_xfer (bank4 PA6/PA5)
+ * 占 pin 133/134 = 撞 i2s1m0_sdi0/sdi1 → i2s1_8ch probe 失败 → ms4344 deferred。
+ * 修复在 line 998：pinctrl-0 改为 i2c5m0_xfer (bank3 PC6/PC7) 避开 i2s1m0 全部 pin。
+ *
+ * 旧的 v5 修复 "disable i2c4 (feac0000)" 是 no-op（dtsi 默认即 disabled），
+ * 但保留下来以便后人参考。真正 B 修复在 i2c5 那一行。 */
+
+&vop_mmu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+/* vp0 & vp1 splice for 8K output */
+&vp0 {
+    rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER0 | 1 << ROCKCHIP_VOP2_ESMART0)>;
+    rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART0>;
+};
+
+&vp1 {
+    rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER1 | 1 << ROCKCHIP_VOP2_ESMART1)>;
+    rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART1>;
+};
+
+&vp2 {
+    rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER2 | 1 << ROCKCHIP_VOP2_ESMART2)>;
+    rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART2>;
+};
+
+&vp3 {
+    rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER3 | 1 << ROCKCHIP_VOP2_ESMART3)>;
+    rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART3>;
+};
+
+&i2c2 {
+    status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2m4_xfer>;
+
+	it6621: it6621@4f {
+			reg = <0x4f>;
+			/*
+			 * 注意：vendor 6.1 的 sound/soc/codecs/it6621/it6621-codec.c 里
+			 * of_match 只有 { .compatible = "ite,it6621" } —— 没有 it662x 通配。
+			 * 写 "ite,it662x" 驱动不会 probe，i2c 上 0x4f 有应答却无声卡注册。
+			 */
+			compatible = "ite,it6621";
+			/*
+			 * IT6621 的 INT 脚是低电平有效（芯片 datasheet：INTn open-drain，
+			 * 拉低表示有中断）。vendor 6.1 驱动 it6621-codec.c 注册中断时写死
+			 * IRQF_TRIGGER_LOW；而 DT 配置的 IRQ 极性以 DTS 为准，所以这里必须
+			 * 写 LEVEL_LOW，否则 GPIO 中断控制器按高电平判定、IRQ 永远不触发，
+			 * eARC 的 HPD/状态机事件收不到、链路永远停在 unknown。
+			 * 引脚 GPIO4_A3 对应原厂 Android DTB 里的 #int-gpio（<0xf3 0x03 0x01>），
+			 * 原厂只是注释掉没删，vendor 6.1 驱动依赖这条 IRQ 推进 eARC FSM，保留。
+			 */
+			interrupt-parent = <&gpio4>;
+			interrupts = <RK_PA3 IRQ_TYPE_LEVEL_LOW>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&it662x_int>;
+			dev-name = "IT6621";
+			/*
+			 * 属性一律带 "ite," 前缀 —— vendor 6.1 的 it6621-codec.c 用
+			 * device_property_read_*("ite,audio-source") / ("ite,fixed-lcf") 读取，
+			 * 还有 ite,force-arc / ite,force-earc 两个 bool。
+			 * Android 5.10 那版驱动用的是无前缀的 audio-source / fixed-lcf，
+			 * 直接照抄会 "no input audio source" -> probe -22。
+			 * ite,force-arc 对应原厂 force-arc-mode：把 eARC TX 强制进 ARC 模式，
+			 * 不依赖对端完整 eARC 握手，对普通电视/显示器兼容性更好。
+			 */
+			ite,audio-source = "spdif";
+			ite,fixed-lcf = <0x0f>;
+			ite,force-arc;
+			#sound-dai-cells = <0x00>;
+			status = "okay";
+		};
+};
+// #配置外置Type-C控制器芯片et7304
+// #需要根据实际的硬件设计，配置"I2C/interrupts/vbus-supply/usb_con"的属性
+&i2c3 {
+    status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3m0_xfer>;
+
+    usbc0: et7303@4e {
+        // [2026-09-14] 内核源码有 drivers/usb/typec/tcpm/tcpci_et7303.c（Kconfig:
+        // CONFIG_TYPEC_ET7303，本内核默认未开启），其匹配表正是 "etek,et7303"。
+        // 之前加的 "tcpci" 回退会让通用 tcpci 驱动抢先绑定，而通用驱动做不了
+        // ET7303 的特有初始化 -> INT 永不拉低(IRQ计数恒0) -> TCPM 卡死。
+        // 故去掉 "tcpci" 回退，让 et7303 驱动独占。
+        compatible = "etek,et7303";
+        reg = <0x4e>;
+		// interrupt-parent = <0xe3>;
+		// interrupts = <0x0d 0x08>;
+        interrupt-parent = <&gpio4>;
+        interrupts = <RK_PB5 IRQ_TYPE_LEVEL_LOW>;
+        pinctrl-names = "default";
+        pinctrl-0 = <&usbc0_int>;
+        vbus-supply = <&vbus5v0_typec>;
+        status = "okay";
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                usbc0_role_sw: endpoint@0 {
+                	remote-endpoint = <&dwc3_0_role_switch>;
+                };
+            };
+        };
+
+        usb_con: connector {
+			compatible = "usb-c-connector";
+			label = "USB-C";
+			data-role = "dual";
+			power-role = "dual";
+			// [2026-09-14 修正] 对齐 Android 真值源 tree-c.dts.txt:6954 的
+			// try-power-role = "sink"。原改为 "source" 属误判：本口虽作 DP 输出/USB 主机，
+			// 但接 U 盘 / HDMI 显示器等纯 sink 设备时，DRP 协商最终仍由 AM60 担当 source。
+			// 以 Android 实测可用的配置为准，回退为 "sink"。
+			try-power-role = "sink";
+			op-sink-microwatt = <1000000>;
+			// [2026-09-14] 【对齐真值源】原先 sink/source 的 3A/2A 写反了。
+			// 真值源 reference/tree-c.dts.txt:6951-6954：
+			//   sink-pdos   = <0x401912c> = PDO_FIXED(5000, 3000, USB_COMM)  -> 受电 3A
+			//   source-pdos = <0x40190c8> = PDO_FIXED(5000, 2000, USB_COMM)  -> 供电 2A
+			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
+			source-pdos = <PDO_FIXED(5000, 2000, PDO_FIXED_USB_COMM)>;
+
+			altmodes {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				altmode@0 {
+					reg = <0>;
+					svid = <0xff01>;
+					vdo = <0xffffffff>;
+				};
+			};
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					usbc0_orien_sw: endpoint {
+						remote-endpoint = <&usbdp_phy0_orientation_switch>;
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+					dp_altmode_mux: endpoint {
+						remote-endpoint = <&usbdp_phy0_dp_altmode_mux>;
+					};
+				};
+			};
+		};
+    };
+};
+
+&i2c5 {
+	status = "okay";
+	pinctrl-names = "default";
+	// 原 i2c5m2_xfer 用 bank4 PA6/PA5 = pin 133/134，与 i2s1m0_sdi0/sdi1
+	// 撞 → i2s1_8ch probe 失败 → ms4344 永久 deferred。v6 改回 i2c5m0_xfer
+	// （bank3 PC6/PC7 = gpio3-22/23），避开 i2s1m0 全部 pin。
+	pinctrl-0 = <&i2c5m0_xfer>;
+
+	rs5c372a: rs5c372a@32 {
+		compatible = "ricoh,rs5c372a";
+		reg = <0x32>;
+		// rtc_alarm_irq_pin = <0x12f 0x14 0x08>;
+		rtc_alarm_irq_pin = <&gpio0 RK_PC4 IRQ_TYPE_LEVEL_LOW>;
+	};
+};	// ok
+
+&i2s0_8ch {
+	status = "okay";
+	rockchip,playback-channels = <2>;
+	rockchip,capture-channels = <2>;
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2s0_lrck
+			 &i2s0_sclk
+			 &i2s0_sdi0
+			 &i2s0_sdo0>;
+};
+
+&rockchip_suspend {
+	compatible = "rockchip,pm-rk3588";
+	status = "okay";
+	rockchip,sleep-debug-en = <1>;
+	rockchip,sleep-mode-config = <
+		(0
+		| RKPM_SLP_ARMOFF_DDRPD
+		)
+	>;
+	rockchip,wakeup-config = <
+		(0
+		| RKPM_GPIO_WKUP_EN
+		| RKPM_USB_WKUP_EN
+		)
+	>;
+};
+
+&avdd_0v75_s0 {
+	regulator-state-mem {
+		regulator-on-in-suspend;
+		regulator-suspend-microvolt = <837500>;
+	};
+};
+
+&avcc_1v8_s0 {
+	regulator-state-mem {
+		regulator-on-in-suspend;
+		regulator-suspend-microvolt = <1800000>;
+	};
+};
+
+&vcc_1v8_s0 {
+	regulator-state-mem {
+		regulator-on-in-suspend;
+		regulator-suspend-microvolt = <1800000>;
+	};
+};
+
+&vcc_3v3_s0 {
+	regulator-state-mem {
+		regulator-on-in-suspend;
+		regulator-suspend-microvolt = <3300000>;
+	};
+};
+
+&vdd_log_s0 {
+	regulator-state-mem {
+		regulator-on-in-suspend;
+		regulator-suspend-microvolt = <750000>;
+	};
+};
+
+&vdd_ddr_pll_s0 {
+	regulator-state-mem {
+		regulator-on-in-suspend;
+		regulator-suspend-microvolt = <850000>;
+	};
+};
+
+&pwm1 {
+	pinctrl-0 = <&pwm1m1_pins>;
+	status = "okay";
+};
+
+&uart4 {
+	pinctrl-0 = <&uart4m2_xfer>;
+	status = "okay";
+};
+
+&uart7 {
+	pinctrl-0 = <&uart7m0_xfer>;
+	status = "okay";
+};
+
+&uart9 {
+	pinctrl-0 = <&uart9m0_xfer &uart9m0_ctsn &uart9m0_rtsn>;
+	uart-has-rtscts;
+	status = "okay";
+};
+
+/* Type-C USB 3.1/DP 全功能 DTS 配置 */
+// #USB2.0 PHY配置属性"rockchip,typec-vbus-det"，表示支持Type-C VBUS_DET常拉高的硬件设计
+&usbdrd3_0{
+	status = "okay";
+};
+
+// #USB3.1 OTG0 Controller
+&usbdrd_dwc3_0 {
+	status = "okay";
+    // [2026-09-14] 【回退】曾短暂改成 "host"（想绕过 CC 协商直接出 VBUS/枚举外设），
+    // 但实测改后 CC_STATUS 从 0x06(有设备) 退化成 0x00(全 Open)，反而更差。
+    // 真值源 reference/tree-c.dts.txt:12050 确认出厂就是 "otg" + usb-role-switch +
+    // port/endpoint 连到 usbc0_role_sw。DP Alt Mode 输出时 data role 由 TCPM 通过
+    // usb-role-switch 自动切成 host，不需要、也不应该手工钉死。
+    dr_mode = "otg";
+    // [2026-09-14] 真值源:12041 有此 quirk：跳过 dwc3 对 PHY 的初始化，
+    // 避免与 usbdp_phy0（Type-C 复用 PHY，同时供给 dp0）打架。
+    quirk-skip-phy-init;
+    usb-role-switch;
+    port {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        dwc3_0_role_switch: endpoint@0 {
+        	reg = <0>;
+        	remote-endpoint = <&usbc0_role_sw>;
+        };
+    };
+};
+
+&u2phy0 {
+        status = "okay";
+};
+
+&u2phy0_otg {
+	status = "okay";
+    rockchip,typec-vbus-det;
+};
+
+// #USB3.1/DP PHY0，需要根据硬件设计，配置属性"sbu1-dc-gpios"和"sbu2-dc-gpios"
+&usbdp_phy0 {
+	status = "okay";
+    orientation-switch;
+	// [2026-09-14] 删除 rockchip,dp-lane-mux：真值源 tree-c.dts.txt:3416 的 fed80000
+	// **没有**该属性（它只出现在 fed90000=PHY1 上）。多余属性会导致 PHY 初始化异常，
+	// 对应日志 "trsv ln0 mon rx cdr lock timeout / disable u3 port because udphy not ready"。
+	// 与 docs/RK3588-SMART-AM60-TypeC-调试文档.md §3.2(3) 结论一致。
+	// rockchip,dp-lane-mux = <0 1 2 3 >;
+    svid = <0xff01>;
+	// sbu1-dc-gpios = <0xf4 0x08 0x00>;
+    sbu1-dc-gpios = <&gpio3 RK_PB0 GPIO_ACTIVE_HIGH>;
+	// sbu2-dc-gpios = <0xf4 0x07 0x00>;
+    sbu2-dc-gpios = <&gpio3 RK_PA7 GPIO_ACTIVE_HIGH>;
+
+    port {
+            #address-cells = <1>;
+            #size-cells = <0>;
+		    usbdp_phy0_orientation_switch: endpoint@0 {
+                    reg = <0>;
+                    remote-endpoint = <&usbc0_orien_sw>;
+            };
+
+            usbdp_phy0_dp_altmode_mux: endpoint@1 {
+                    reg = <1>;
+                    remote-endpoint = <&dp_altmode_mux>;
+             };
+    };
+
+};
+
+&usbdp_phy0_u3 {
+	status = "okay";
+};
+
+&usbdp_phy0_dp {
+	status = "okay";
+};
+
+// USB3.0 Type-C1
+&usbdrd3_1{
+	status = "okay";
+};
+//如果配置dr_mode为otg，同时配置extcon = <&u2phy1>属性，才能支持软件切换Device/Host mode
+&usbdrd_dwc3_1{
+	status = "okay";
+	dr_mode = "otg";
+	maximum-speed = "high-speed";
+	extcon = <&u2phy1>;
+};
+
+&usbdp_phy1 {
+	status = "okay";
+};
+
+&usbdp_phy1_u3 {
+	status = "okay";
+};
+
+&usbdp_phy1_dp {
+	status = "okay";
+};
+
+// USB2.0 PHY1
+&u2phy1 {
+        status = "okay";
+};
+
+&u2phy1_otg {
+        status = "okay";
+};
+
+&dp0 {
+	status = "okay";
+};
+
+&dp0_in_vp0 {
+	status = "disabled";
+};
+
+&dp0_in_vp1 {
+	status = "disabled";
+};
+
+&dp0_in_vp2 {
+	status = "okay";
+};
+
+// [2026-09-14] ★ 关键缺失：display_subsystem 的 DP0 视频路由默认是 **disabled**
+// （实测 /sys/firmware/devicetree/base/display-subsystem/route/route-dp0: status=disabled，
+//   而 route-hdmi0/route-hdmi1 都是 okay）。不开这条路由，即使 CC 协商成功、
+//   Alt Mode 激活，DP 也不会出画面。
+// 对应 docs/RK3588-SMART-AM60-TypeC-调试文档.md §3.2(5)。
+// 本 DTS 用 dp0_in_vp2，故 connect 指 vp2_out_dp0（多屏文档 §2.5 亦为 VP2）。
+&route_dp0 {
+	status = "okay";
+	connect = <&vp2_out_dp0>;
+};
+
+&dp1 {
+	status = "disabled";
+};
+
+&dp1_in_vp0 {
+	status = "disabled";
+};
+
+&dp1_in_vp1 {
+	status = "disabled";
+};
+
+&dp1_in_vp2 {
+	status = "okay";
+};
+
+&spdif_tx2 {
+	status = "okay";
+};
+
+/*
+ * spdif_tx0 (fe4e0000) —— it6621_sound 的 CPU DAI。
+ * 原厂 Android 基础 DTB 里所有 spdif 都是 disabled，板级才打开；
+ * 已注册的平台设备里有 fe4e0000.spdif-tx，说明 IT6621 走的就是这一路。
+ * 之前没开 → simple-audio-card 报 "parse error"（引用的 DAI 是 disabled 节点）。
+ * pinctrl 用 spdif0m0_tx（GPIO1_PB6 mux3），与原厂 spdif-tx@fe4e0000 的 pinctrl-0 一致。
+ */
+&spdif_tx0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&spdif0m0_tx>;
+};
+
+/* Type-A USB 3.1 DTS 配置 */
+// #使能USB3.1/SATA/PCIe Combo PHY
+&combphy0_ps {
+	status = "okay";
+};
+
+&pcie2x1l0 {	// eth
+	// reset-gpios = <0x194 0x0b 0x00>;
+	reset-gpios = <&gpio2 RK_PB3 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie2x1l0>;
+	status = "okay";
+};	// ok
+
+
+&pcie2x1l2 {	// wifi
+	phys = <&combphy0_ps PHY_TYPE_PCIE>;
+	// reset-gpios = <0xee 0x05 0x00>;
+	reset-gpios = <&gpio3 RK_PA5 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie2x1l2>;
+	status = "okay";
+};	// ok
+
+&combphy1_ps {
+	status = "okay";
+};
+
+&combphy2_psu {
+	status = "okay";
+};
+
+// #配置USB3.1 HOST2 Controller
+&usbhost3_0 {
+    status = "okay";
+};
+
+&usbhost_dwc3_0 {
+    status = "okay";
+    // 修正：RK3588 的 usbhost3_0(USB3.0 HOST2) 的 combo PHY 必须指到 combphy2_psu，
+    // 不能沿用 dtsi 默认的 combphy0_ps——后者已被 pcie2x1l2(WiFi/AP6276P)占用，
+    // 两者抢同一个 combphy0_ps 会导致 USB3 HOST2 拿不到 PHY 而整个控制器不 probe。
+    // 参考 Android 原厂 DTB(tree-a.dts)：usbhost3_0 的 phys = combphy2_psu(0xfee20000)。
+    phys = <&combphy2_psu PHY_TYPE_USB3>;
+};
+
+// #USB2.0 PHY2/3配置"phy-supply"属性，用于控制VBUS输出5V
+&u2phy2 {
+	status = "okay";
+};
+
+&u2phy2_host {
+	status = "okay";
+};
+
+&u2phy3 {
+	status = "okay";
+};
+
+&u2phy3_host {
+	status = "okay";
+};
+
+// #USB2.0 HOST0/1 Controller
+&usb_host0_ehci {
+    status = "okay";
+};
+
+&usb_host0_ohci {
+    status = "okay";
+};
+
+&usb_host1_ehci {
+    status = "okay";
+};
+
+&usb_host1_ohci {
+    status = "okay";
+};
+
+&pinctrl {
+	gpio-leds {
+		sys_led_pin: sys-led-pin {
+			rockchip,pins = <1 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		usr_led_pin: usr-led-pin {
+			rockchip,pins = <0 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	headphone {
+		hp_detect: hp-detect {
+			// rockchip,pins = <0x01 0x14 0x00 0x162>;
+			rockchip,pins = <1 RK_PC4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		linein_det: linein-det {
+				//rockchip,pins = <0x01 0x16 0x00 0x162>;
+				rockchip,pins = <1 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	hdmirx {
+		hdmirx_det: hdmirx-det {
+			// rockchip,pins = <0x01 0x1d 0x00 0x168>;
+			rockchip,pins = <1 RK_PD5 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	usb-typec {
+
+			usbc0_int: usbc0-int {
+				// rockchip,pins = <0x04 0x0d 0x00 0x168>;
+				rockchip,pins = <4 RK_PB5 RK_FUNC_GPIO &pcfg_pull_up>;
+			};
+
+			typec5v_pwren: typec5v-pwren {
+				// rockchip,pins = <0x04 0x0e 0x00 0x162>;
+				rockchip,pins = <4 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
+			};
+	};
+
+	rtl8111 {
+			rtl8111_isolate: rtl8111-isolate {
+				// rockchip,pins = <0x00 0x17 0x00 0x168>;
+				rockchip,pins = <0 RK_PC7 RK_FUNC_GPIO &pcfg_pull_up>;
+			};
+
+rtl8111_poweren: rtl8111-poweren {
+			// rockchip,pins = <0x00 0x0f 0x00 0x162>;
+			// 真值源：regulator vcc3v3_pcie2x1l0 用 &gpio0 RK_PB7 (GPIO0 controller PB7)，
+			// pinctrl 必须把同一脚 mux 成 GPIO 功能（bank 0 = GPIO0），否则 regulator
+			// 拉 gpio0 PB7 时该 pin 仍是默认功能，PCIe 设备得不到 3V3（LTSSM 卡 0x3）。
+			rockchip,pins = <0 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	wireless-bluetooth {
+			uart9_gpios: uart9-gpios {
+				// rockchip,pins = <0x04 0x14 0x00 0x162>;
+				rockchip,pins = <4 RK_PC4 RK_FUNC_GPIO &pcfg_pull_none>;
+			};
+
+			bt_reset_gpio: bt-reset-gpio {
+				// rockchip,pins = <0x00 0x08 0x00 0x162>;
+				rockchip,pins = <0 RK_PB0 RK_FUNC_GPIO &pcfg_pull_none>;
+			};
+		};
+
+	wireless-wifi {
+		wifi_en_gpio: wifi-en-gpio {
+			// 与 regulator vcc3v3_pcie2x1l2(gpio0 PA0) 同脚同 controller：bank 0。
+			rockchip,pins = <0 RK_PA0 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	refclk {
+			refclk_pins: refclk-pins {
+				//rockchip,pins = <0x00 0x00 0x01 0x162>;
+				rockchip,pins = <0 RK_PA0 1 &pcfg_pull_none>;
+			};
+	};
+
+	it662x {
+
+			it662x_int: it662x-int {
+				//rockchip,pins = <0x04 0x03 0x00 0x168>;
+				rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
+			};
+	};
+
+	gpio-phy_power {
+
+			gpio_wol_en: gpio-wol_en {
+				// rockchip,pins = <0x00 0x16 0x00 0x16c>;
+				rockchip,pins = <0 RK_PC6 RK_FUNC_GPIO &pcfg_output_low_pull_none>;
+			};
+
+			gpio_wifi_wake: gpio-wifi_wake {
+				// rockchip,pins = <0x03 0x13 0x00 0x162>;
+				rockchip,pins = <3 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none>;
+			};
+
+			sdmmc_pwr: sdmmc-pwr {
+				//rockchip,pins = <0x00 0x17 0x00 0x162>;
+				rockchip,pins = <0 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
+			};
+	};
+
+	gpio-commons {
+
+			gpio_pc_in_det: gpio-pc_in_det {
+				//rockchip,pins = <0x00 0x15 0x00 0x16d>;
+				rockchip,pins = <0 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none_drv_level_5>;
+			};
+
+			gpio_usb30_b_ocp_det: gpio-usb30_b_ocp_det {
+				//rockchip,pins = <0x02 0x0b 0x00 0x162>;
+				rockchip,pins = <2 RK_PB3 RK_FUNC_GPIO &pcfg_pull_none>;
+			};
+
+			gpio_6621_rst: gpio-6621_rst {
+				//rockchip,pins = <0x03 0x1d 0x00 0x16c>;
+				rockchip,pins = <3 RK_PD5 RK_FUNC_GPIO &pcfg_output_low_pull_none>;
+			};
+		};
+};
+
+&gpio0 {
+	gpio-line-names =
+		/* GPIO0_A0-A3 */
+		"", "", "", "",
+		/* GPIO0_A4-A7 */
+		"", "", "", "",
+
+		/* GPIO0_B0-B3 */
+		"", "", "", "",
+		/* GPIO0_B4-B7 */
+		"", "PIN_8", "PIN_10", "",
+
+		/* GPIO0_C0-C3 */
+		"", "", "", "",
+		/* GPIO0_C4-C7 */
+		"", "", "", "",
+
+		/* GPIO0_D0-D3 */
+		"", "", "", "",
+		/* GPIO0_D4-D7 */
+		"", "", "", "";
+};
+
+&gpio1 {
+	gpio-line-names =
+		/* GPIO1_A0-A3 */
+		"", "", "", "",
+		/* GPIO1_A4-A7 */
+		"", "", "", "",
+
+		/* GPIO1_B0-B3 */
+		"", "PIN_21", "PIN_19", "PIN_23",
+		/* GPIO1_B4-B7 */
+		"PIN_24", "PIN_26", "", "PIN_31",
+
+		/* GPIO1_C0-C3 */
+		"", "", "", "",
+		/* GPIO1_C4-C7 */
+		"", "", "", "",
+
+		/* GPIO1_D0-D3 */
+		"", "", "", "",
+		/* GPIO1_D4-D7 */
+		"", "", "", "PIN_29";
+};
+
+&gpio2 {
+	gpio-line-names =
+		/* GPIO2_A0-A3 */
+		"", "", "", "",
+		/* GPIO2_A4-A7 */
+		"", "", "", "",
+
+		/* GPIO2_B0-B3 */
+		"", "", "", "",
+		/* GPIO2_B4-B7 */
+		"", "", "", "",
+
+		/* GPIO2_C0-C3 */
+		"", "", "", "",
+		/* GPIO2_C4-C7 */
+		"", "", "", "",
+
+		/* GPIO2_D0-D3 */
+		"", "", "", "",
+		/* GPIO2_D4-D7 */
+		"", "", "", "";
+};
+
+&gpio3 {
+	gpio-line-names =
+		/* GPIO3_A0-A3 */
+		"", "", "", "",
+		/* GPIO3_A4-A7 */
+		"PIN_16", "", "", "PIN_33",
+
+		/* GPIO3_B0-B3 */
+		"", "PIN_36", "PIN_38", "PIN_40",
+		/* GPIO3_B4-B7 */
+		"", "PIN_12", "PIN_35", "PIN_13",
+
+		/* GPIO3_C0-C3 */
+		"PIN_15", "PIN_11", "PIN_32", "PIN_7",
+		/* GPIO3_C4-C7 */
+		"", "", "", "",
+
+		/* GPIO3_D0-D3 */
+		"", "", "", "",
+		/* GPIO3_D4-D7 */
+		"", "", "", "";
+};
+
+&gpio4 {
+	gpio-line-names =
+		/* GPIO4_A0-A3 */
+		"", "", "", "",
+		/* GPIO4_A4-A7 */
+		"", "", "", "",
+
+		/* GPIO4_B0-B3 */
+		"", "", "PIN_5", "PIN_3",
+		/* GPIO4_B4-B7 */
+		"", "", "", "",
+
+		/* GPIO4_C0-C3 */
+		"", "", "", "",
+		/* GPIO4_C4-C7 */
+		"PIN_18", "PIN_28", "PIN_27", "",
+
+		/* GPIO4_D0-D3 */
+		"", "", "", "",
+		/* GPIO4_D4-D7 */
+		"", "", "", "";
+};
+
+/*
+ * ==========================================================================
+ * 实机（adb 提取）与上游 SRO SMART-AM60 DTS 的差异 —— 待验证 / 待补
+ * 详见 am60-porting/AM60-移植信息提取报告.md 第 5.6 节（I2C 设备映射实测）
+ * ==========================================================================
+ *
+ * 1. RTC：实机是 Belling BL5372（i2c5 @0x32，Android 侧用 rtc_bl5372.ko）。
+ *    vendor 6.1 内核只有 drivers/rtc/rtc-rs5c372.c（没有 bl5372 的 compatible），
+ *    上游 DTS 也是直接写 "ricoh,rs5c372a"，这里沿用。如果时间不准/读不出，
+ *    把 &i2c5 下的 rs5c372a@32 改成 status = "disabled" 即可，不影响启动。
+ *
+ * 2. Type-C TCPCI：实机是 et7304，但 vendor 6.1 只有
+ *    drivers/usb/typec/tcpm/tcpci_et7303.c（CONFIG_TYPEC_ET7303），
+ *    所以沿用 "etek,et7303"。
+ *
+ * 3. ES7243E ×2（i2c3 @0x10 / @0x13）：内核驱动 sound/soc/codecs/es7243e.c 的
+ *    of_match 是私有的 "ES7243E_MicArray_0..7"，本 DTS 已在 &i2c3 下加
+ *    es7243-line-in@10 / es7243-mic-in@13，并接到 es7243_adc_linein_sound
+ *    （simple-audio-card，capture-only）走 i2s2_2ch。
+ *    ⚠ 该 vendor 驱动按固定 3 颗 es7243e（ES7243E_CHANNELS_MAX=AIN_6_CH）设计，
+ *    i2c_clt[] 数组仅 3 槽；本板只有 2 颗 → 第 3 槽恒为 NULL，probe 时
+ *    es7243e_read(NULL) 空指针 Oops。已由内核补丁
+ *    0100-fix-es7243e-channels-max.patch 把 ES7243E_CHANNELS_MAX 改为
+ *    AIN_4_CH（=4 通道，匹配 2 颗立体声），消除空指针。（最坏情况：0x10/0x13
+ *    实际无 ACK 也只是 I2C NAK 无音频，不会崩溃）
+ *
+ * 4. i2c4 @0x36 (videoin_drv) / @0x43（无驱动）：本 DTS 未使能 i2c4。
+ *
+ * 5. 无线：AP6276P(BCM43756) 走 &pcie2x1l2；BT 用的 UART 在本 DTS 里
+ *    &uart4 / &uart7 / &uart9 三个候选都在，实机到底是哪个要抓启动日志确认。
+ *    brcmfmac 的 nvram 也需要放到 rootfs 里。
+ *
+ * 6. 有线：&pcie2x1l0 -> RTL8168/RTL8111（vendor 6.1 带 r8169 / r8168 模块）。
+ *    另外还有一个 USB RTL8152（rtl8152 驱动）。
+ */

@@ -1,0 +1,109 @@
+name: Build Armbian Image (单板)
+
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: "板卡"
+        type: choice
+        required: true
+        default: h96s
+        options:
+          - aio-3288c
+          - h96-m9
+          - h96s
+          - am60-sa12
+          - neardi-lz200
+      branch:
+        description: "KERNEL 分支覆盖 (留空 = 用板卡 build.env 默认)"
+        required: false
+        default: ""
+        type: string
+      release:
+        description: "发行版覆盖 noble/bookworm/trixie (留空 = 默认)"
+        required: false
+        default: ""
+        type: string
+      desktop:
+        description: "BUILD_DESKTOP 覆盖 (留空 = 默认)"
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - "yes"
+          - "no"
+      build_ref:
+        description: "armbian/build 引用 (分支/标签)"
+        required: false
+        default: "master"
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space (构建需要 ~50GB)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          toolchain: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Clone armbian/build (${{ inputs.build_ref }})
+        run: |
+          git clone --depth=1 --branch "${{ inputs.build_ref }}" \
+            https://github.com/armbian/build armbian-build
+
+      - name: 同步板卡自定义文件 (仅该板卡, 互不干扰)
+        run: bash scripts/sync-board-to-build.sh "${{ inputs.board }}" armbian-build
+
+      - name: 组装构建参数 (build.env 默认 + 手动覆盖)
+        id: args
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          source "boards/${{ inputs.board }}/build.env"
+          set +a
+          # 手动输入优先, 留空则用 build.env 默认
+          BRANCH="${BRANCH}"; RELEASE="${RELEASE}"; DESKTOP="${BUILD_DESKTOP}"
+          if [ -n "${{ inputs.branch }}" ]; then BRANCH="${{ inputs.branch }}"; fi
+          if [ -n "${{ inputs.release }}" ]; then RELEASE="${{ inputs.release }}"; fi
+          if [ -n "${{ inputs.desktop }}" ]; then DESKTOP="${{ inputs.desktop }}"; fi
+          ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
+          echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          echo "构建参数: ${ARGS}"
+
+      - name: 编译镜像
+        run: |
+          cd armbian-build
+          sudo ./compile.sh build \
+            ${{ steps.args.outputs.args }} \
+            KERNEL_CONFIGURE=no \
+            COMPRESS_OUTPUTIMAGE=sha,img
+
+      - name: 上传镜像产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: armbian-${{ inputs.board }}-${{ github.run_number }}
+          path: |
+            armbian-build/output/images/**/*.img.xz
+            armbian-build/output/images/**/*.sha
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 上传构建日志 (失败时)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ inputs.board }}-${{ github.run_number }}
+          path: armbian-build/output/logs/**
+          retention-days: 14

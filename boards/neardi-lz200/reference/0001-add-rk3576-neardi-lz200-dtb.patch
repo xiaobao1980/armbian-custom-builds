@@ -1,0 +1,6 @@
+--- a/arch/arm64/boot/dts/rockchip/Makefile
++++ b/arch/arm64/boot/dts/rockchip/Makefile
+@@ -1,3 +1,4 @@
+ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-nanopi-m5.dtb
++dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-neardi-lz200-linux.dtb
+ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576s-evb1-v10.dtb

@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * CVTE SA12 / AM60 —— U-Boot 侧 DTS
+ * 部署：patch/u-boot/legacy/u-boot-radxa-rk35xx/dt/
+ * 对应 CONFIG_DEFAULT_DEVICE_TREE="rk3588-am60-sa12"
+ *
+ * USING_KERNEL_DTB_V2=y，运行时用内核 DTB；这个文件只服务 U-Boot SPL 早期阶段。
+ * 极简即可，供电/显示等细节交给内核侧 DTS。
+ */
+/dts-v1/;
+#include "rk3588.dtsi"
+#include "rk3588-u-boot.dtsi"
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "CVTE SA12 AM60 OPS (RK3588)";
+	compatible = "cvte,sa12", "rockchip,rk3588";
+
+	chosen {
+		stdout-path = &uart2;
+		/* OPS 模块无 SPI NOR/NAND，优先 SD 卡、其次 eMMC */
+		u-boot,spl-boot-order = &sdmmc, &sdhci;
+	};
+};
+
+&uart2 {
+	u-boot,dm-pre-reloc;
+	status = "okay";
+};
+
+&sdhci {
+	u-boot,dm-pre-reloc;
+	status = "okay";
+};
+
+&sdmmc {
+	u-boot,dm-pre-reloc;
+	status = "okay";
+};

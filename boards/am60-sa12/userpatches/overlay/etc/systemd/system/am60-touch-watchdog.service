@@ -1,0 +1,12 @@
+[Unit]
+Description=AM60 IR touch frame USB recovery watchdog
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/am60-touch-watchdog.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# rc.local — H96 MAX M9 board bring-up
+#
+# Armbian first-boot user setup (hostname, ssh keys, etc.) MUST run first.
+/usr/local/sbin/armbian-firstboot-user.sh
+
+# Bring up the on-board UART Bluetooth (RTL8723DS) at boot.
+/usr/bin/hciattach -s 1500000 /dev/ttyS4 any 1500000 flow nosleep &
+sleep 1   #如需要蓝牙音频要下载pulseaudio 并开机启动
+pulseaudio --start || true # 同上; 未装 pulseaudio 时不阻断后续
+
+exit 0

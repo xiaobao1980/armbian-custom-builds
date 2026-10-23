@@ -1,0 +1,13 @@
+diff --git a/sound/soc/codecs/es7243e_usr_cfg.h b/sound/soc/codecs/es7243e_usr_cfg.h
+index 1d9760ada940..2c2c237e22e6 100644
+--- a/sound/soc/codecs/es7243e_usr_cfg.h
++++ b/sound/soc/codecs/es7243e_usr_cfg.h
+@@ -70,7 +70,7 @@
+ #define AIN_12_CH  12
+ #define AIN_14_CH  14
+ #define AIN_16_CH  16
+-#define ES7243E_CHANNELS_MAX    AIN_6_CH
++#define ES7243E_CHANNELS_MAX    AIN_4_CH
+ /*
+ * to select the clock soure for internal MCLK clock
+ */

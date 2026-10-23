@@ -1,0 +1,2018 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: John Doe <john.doe@somewhere.on.planet>
+Date: Wed, 4 Mar 2026 23:59:57 +0800
+Subject: Patching kernel rk35xx files
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-input-keymap.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dcphy0.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy1.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy3.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-full-typec-phy.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-gmac.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-hdmi.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-linux.dts
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-misc-devices.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-sound-ctl.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-wifibt.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200.dtsi
+ arch/arm64/boot/dts/rockchip/rk3576-neardi.dtsi
+
+Signed-off-by: John Doe <john.doe@somewhere.on.planet>
+---
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-input-keymap.dtsi         | 111 +++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dcphy0.dtsi     | 197 ++++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy1.dtsi      | 192 ++++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy3.dtsi      | 193 ++++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-full-typec-phy.dtsi | 153 +++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-gmac.dtsi           |  72 ++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-hdmi.dtsi           |  35 +
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-linux.dts           |  27 +
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-misc-devices.dtsi   | 103 ++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-sound-ctl.dtsi      |  80 ++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-wifibt.dtsi         |  60 ++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200.dtsi                | 199 ++++
+ arch/arm64/boot/dts/rockchip/rk3576-neardi.dtsi                      | 471 ++++++++++
+ 13 files changed, 1893 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-input-keymap.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-input-keymap.dtsi
+new file mode 100755
+index 000000000000..c4f9528213e1
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-input-keymap.dtsi
+@@ -0,0 +1,111 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright (c) 2024 Rockchip Electronics Co., Ltd.
++ *
++ */
++
++&pwm0_2ch_0 {
++	compatible = "rockchip,remotectl-pwm-v4";
++	pinctrl-names = "default";
++	pinctrl-0 = <&pwm0m0_ch0>;
++	remote_pwm_id = <0>;
++	handle_cpu_id = <1>;
++	remote_support_psci = <0>;
++	status = "okay";
++
++	ir_key1 {
++		rockchip,usercode = <0x4040>;
++		rockchip,key_table =
++			<0xf2	KEY_REPLY>,
++			<0xba	KEY_BACK>,
++			<0xf4	KEY_UP>,
++			<0xf1	KEY_DOWN>,
++			<0xef	KEY_LEFT>,
++			<0xee	KEY_RIGHT>,
++			<0xbd	KEY_HOME>,
++			<0xea	KEY_VOLUMEUP>,
++			<0xe3	KEY_VOLUMEDOWN>,
++			<0xe2	KEY_SEARCH>,
++			<0xb2	KEY_POWER>,
++			<0xbc	KEY_MUTE>,
++			<0xec	KEY_MENU>,
++			<0xbf	0x190>,
++			<0xe0	0x191>,
++			<0xe1	0x192>,
++			<0xe9	183>,
++			<0xe6	248>,
++			<0xe8	185>,
++			<0xe7	186>,
++			<0xf0	388>,
++			<0xbe	0x175>;
++	};
++
++	ir_key2 {
++		rockchip,usercode = <0xff00>;
++		rockchip,key_table =
++			<0xb1	KEY_HOME>,
++			<0xbf	KEY_BACK>,
++			<0xfb	KEY_MENU>,
++			<0xaa	KEY_REPLY>,
++			<0xb9	KEY_UP>,
++			<0xe9	KEY_DOWN>,
++			<0xb8	KEY_LEFT>,
++			<0xea	KEY_RIGHT>,
++			<0xeb	KEY_VOLUMEDOWN>,
++			<0xef	KEY_VOLUMEUP>,
++			<0xf7	KEY_MUTE>,
++			<0xe7	KEY_POWER>,
++			<0xfc	KEY_POWER>,
++			<0xa9	KEY_VOLUMEDOWN>,
++			<0xa8	KEY_PLAYPAUSE>,
++			<0xe0	KEY_VOLUMEDOWN>,
++			<0xa5	KEY_VOLUMEDOWN>,
++			<0xab	183>,
++			<0xb7	388>,
++			<0xe8	388>,
++			<0xf8	184>,
++			<0xaf	185>,
++			<0xed	KEY_VOLUMEDOWN>,
++			<0xee	186>,
++			<0xb3	KEY_VOLUMEDOWN>,
++			<0xf1	KEY_VOLUMEDOWN>,
++			<0xf2	KEY_VOLUMEDOWN>,
++			<0xf3	KEY_SEARCH>,
++			<0xb4	KEY_VOLUMEDOWN>,
++			<0xa4	KEY_SETUP>,
++			<0xbe	KEY_SEARCH>;
++	};
++
++	ir_key3 {
++		rockchip,usercode = <0x1dcc>;
++		rockchip,key_table =
++			<0xee	KEY_REPLY>,
++			<0xf0	KEY_BACK>,
++			<0xf8	KEY_UP>,
++			<0xbb	KEY_DOWN>,
++			<0xef	KEY_LEFT>,
++			<0xed	KEY_RIGHT>,
++			<0xfc	KEY_HOME>,
++			<0xf1	KEY_VOLUMEUP>,
++			<0xfd	KEY_VOLUMEDOWN>,
++			<0xb7	KEY_SEARCH>,
++			<0xff	KEY_POWER>,
++			<0xf3	KEY_MUTE>,
++			<0xbf	KEY_MENU>,
++			<0xf9	0x191>,
++			<0xf5	0x192>,
++			<0xb3	388>,
++			<0xbe	KEY_1>,
++			<0xba	KEY_2>,
++			<0xb2	KEY_3>,
++			<0xbd	KEY_4>,
++			<0xf9	KEY_5>,
++			<0xb1	KEY_6>,
++			<0xfc	KEY_7>,
++			<0xf8	KEY_8>,
++			<0xb0	KEY_9>,
++			<0xb6	KEY_0>,
++			<0xb5	KEY_BACKSPACE>;
++	};
++};
++
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dcphy0.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dcphy0.dtsi
+new file mode 100755
+index 000000000000..82466b50ea45
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dcphy0.dtsi
+@@ -0,0 +1,197 @@
++/* neardi lz200 */
++/* CAM0_RST GPIO3_D5 */
++/* CAM0_PDN GPIO3_C7 */
++/* CAM0_EN GPIO3_D0 */
++&{/} {
++	vcc_mipidcphy0: vcc-mipidcphy0-regulator {
++		compatible = "regulator-fixed";
++		gpio = <&gpio3 RK_PD0 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&mipidcphy0_pwr>;
++		regulator-name = "vcc_mipidcphy0";
++		enable-active-high;
++		status = "okay";
++	};
++};
++/* sensor0 --> csi2_dcphy0 --> mipi0_csi2 --> rkcif_mipi_lvds */
++/* rkcif_mipi_lvds_sditf --> rkisp_vir0 */
++&csi2_dcphy0 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi_in_ucam0: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&ov13855_out0>;
++				data-lanes = <1 2 3 4>;
++			};
++		};
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			csidcphy0_out: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&mipi0_csi2_input>;
++			};
++		};
++	};
++};
++
++&i2c3 {
++	status = "okay";
++	pinctrl-0 = <&i2c3m0_xfer>;
++
++    ov138550: ov13855@10 {
++        compatible = "ovti,ov13855";
++        status = "okay";
++        reg = <0x10>;
++        clocks = <&cru CLK_MIPI_CAMERAOUT_M0>;
++        clock-names = "xvclk";
++        power-domains = <&power RK3576_PD_VI>;
++        pinctrl-names = "default";
++        pinctrl-0 = <&cam_clk0m0_clk0
++					 &cam0_rst
++					 &cam0_pwdn>;
++        rockchip,grf = <&sys_grf>;
++        reset-gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_HIGH>;
++        pwdn-gpios = <&gpio3 RK_PC7 GPIO_ACTIVE_HIGH>;
++        avdd-supply = <&vcc_mipidcphy0>;
++        rockchip,camera-module-index = <0>;
++        rockchip,camera-module-facing = "back";
++        rockchip,camera-module-name = "CMK-OT2016-FV1";
++        rockchip,camera-module-lens-name = "default";
++        port {
++            ov13855_out0: endpoint {
++                remote-endpoint = <&mipi_in_ucam0>;
++                data-lanes = <1 2 3 4>;
++            };
++        };
++    };
++};
++
++&mipi0_csi2 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi0_csi2_input: endpoint@1 {
++				reg = <1>;
++				remote-endpoint = <&csidcphy0_out>;
++			};
++		};
++
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi0_csi2_output: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&cif_mipi_in0>;
++			};
++		};
++	};
++};
++
++&rkcif_mmu {
++	status = "okay";
++};
++
++&rkcif {
++	status = "okay";
++};
++
++&rkcif_mipi_lvds {
++	status = "okay";
++
++	port {
++		cif_mipi_in0: endpoint {
++			remote-endpoint = <&mipi0_csi2_output>;
++		};
++	};
++};
++
++&rkcif_mipi_lvds_sditf {
++	status = "okay";
++
++	port {
++		mipi_lvds_sditf: endpoint {
++			remote-endpoint = <&isp_vir0>;
++		};
++	};
++};
++
++&rkisp {
++	status = "okay";
++};
++
++&rkisp_mmu {
++	status = "okay";
++};
++
++&rkisp_vir0 {
++	status = "okay";
++
++	port {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		isp_vir0: endpoint@0 {
++			reg = <0>;
++			remote-endpoint = <&mipi_lvds_sditf>;
++		};
++	};
++};
++
++&rkisp_vir0_sditf {
++	status = "okay";
++};
++
++&rkvpss {
++	status = "okay";
++};
++
++&rkvpss_mmu {
++	status = "okay";
++};
++
++&rkvpss_vir0 {
++	status = "okay";
++};
++
++&pinctrl {
++	cam0 {
++		mipidcphy0_pwr: mipidcphy0-pwr {
++			rockchip,pins =
++				/* camera power en */
++				<3 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		cam0_rst: cam0_rst {
++			rockchip,pins = 
++				/* camera reset */
++				<3 RK_PD5 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		cam0_pwdn: cam0_pwdn {
++			rockchip,pins = 
++				/* camera power down */
++				<3 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy1.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy1.dtsi
+new file mode 100755
+index 000000000000..e0e076cd6d7e
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy1.dtsi
+@@ -0,0 +1,192 @@
++/* dphy1 */
++/* CAM1_RST GPIO2_B5 */
++/* CAM1_PDN GPIO3_B0 */
++/* CAM1_PWREN GPIO3_C5 */
++&{/} {
++	vcc_mipicsi0: vcc-mipicsi0-regulator {
++		compatible = "regulator-fixed";
++		gpio = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&mipicsi0_pwr>;
++		regulator-name = "vcc_mipicsi0";
++		enable-active-high;
++	};
++};
++/* sensor1 --> csi2_dphy1 --> mipi1_csi2 --> rkcif_mipi_lvds1 */
++/* rkcif_mipi_lvds1_stdif --> rkisp_vir1 */
++&csi2_dphy1 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi_in_ucam2: endpoint@2 {
++				reg = <2>;
++				remote-endpoint = <&ov13855_out1>;
++				data-lanes = <1 2 3 4>;
++			};
++		};
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			csidphy1_out: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&mipi1_csi2_input>;
++			};
++		};
++	};
++};
++
++&i2c5 {
++    status = "okay";
++	pinctrl-0 = <&i2c5m3_xfer>;
++
++	ov138551: ov13855@10 {
++        compatible = "ovti,ov13855";
++        status = "okay";
++        reg = <0x10>;
++        clocks = <&cru CLK_MIPI_CAMERAOUT_M1>;
++        clock-names = "xvclk";
++        power-domains = <&power RK3576_PD_VI>;
++        pinctrl-names = "default";
++        pinctrl-0 = <&cam_clk1m0_clk1
++					 &cam1_rst
++					 &cam1_pwdn>;
++        rockchip,grf = <&sys_grf>;
++        reset-gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_HIGH>;
++        pwdn-gpios = <&gpio3 RK_PB0 GPIO_ACTIVE_HIGH>;
++        avdd-supply = <&vcc_mipicsi0>;
++        rockchip,camera-module-index = <0>;
++        rockchip,camera-module-facing = "back";
++        rockchip,camera-module-name = "CMK-OT2016-FV1";
++        rockchip,camera-module-lens-name = "default";
++        port {
++            ov13855_out1: endpoint {
++                remote-endpoint = <&mipi_in_ucam2>;
++                data-lanes = <1 2 3 4>;
++            };
++        };
++    };
++};
++
++&mipi1_csi2 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi1_csi2_input: endpoint@1 {
++				reg = <1>;
++				remote-endpoint = <&csidphy1_out>;
++			};
++		};
++
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi1_csi2_output: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&cif_mipi_in1>;
++			};
++		};
++	};
++};
++
++&rkcif {
++	status = "okay";
++};
++
++&rkcif_mipi_lvds1 {
++	status = "okay";
++
++	port {
++		cif_mipi_in1: endpoint {
++			remote-endpoint = <&mipi1_csi2_output>;
++		};
++	};
++};
++
++&rkcif_mipi_lvds1_sditf {
++	status = "okay";
++
++	port {
++		mipi1_lvds_sditf: endpoint {
++			remote-endpoint = <&isp_vir1>;
++		};
++	};
++};
++
++&rkisp_vir1 {
++	status = "okay";
++
++	port {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		isp_vir1: endpoint@0 {
++			reg = <0>;
++			remote-endpoint = <&mipi1_lvds_sditf>;
++		};
++	};
++};
++
++&rkcif_mmu {
++	status = "okay";
++};
++
++&rkisp {
++	status = "okay";
++};
++
++&rkisp_mmu {
++	status = "okay";
++};
++
++&rkvpss {
++	status = "okay";
++};
++
++&rkvpss_mmu {
++	status = "okay";
++};
++
++&rkvpss_vir1 {
++	status = "okay";
++};
++
++&pinctrl {
++    cam1 {
++		mipicsi0_pwr: mipicsi0-pwr {
++			rockchip,pins =
++				/* camera power en */
++				<3 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		cam1_rst: cam1_rst {
++			rockchip,pins = 
++				/* camera reset */
++				<2 RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		cam1_pwdn: cam1_pwdn {
++			rockchip,pins = 
++				/* camera power down */
++				<3 RK_PB0 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++    };
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy3.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy3.dtsi
+new file mode 100755
+index 000000000000..cf91aa69ffa5
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-cam-dphy3.dtsi
+@@ -0,0 +1,193 @@
++/* dphy3 */
++/* CAM2_RST GPIO3_D6 */
++/* CAM2_PDN GPIO3_D4 */
++/* CAM2_PWREN GPIO3_C6 */
++&{/} {
++	vcc_mipicsi1: vcc-mipicsi1-regulator {
++		compatible = "regulator-fixed";
++		gpio = <&gpio3 RK_PC6 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&mipicsi1_pwr>;
++		regulator-name = "vcc_mipicsi1";
++		enable-active-high;
++	};
++};
++
++/* sensor2 --> csi2_dphy3 --> mipi3_csi2 --> rkcif_mipi_lvds3 */
++/* rkcif_mipi_lvds3_sditf --> rkisp_vir2 */
++&csi2_dphy3 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi_in_ucam3: endpoint@3 {
++				reg = <3>;
++				remote-endpoint = <&ov13855_out3>;
++				data-lanes = <1 2 3 4>;
++			};
++		};
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			csidphy3_out: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&mipi3_csi2_input>;
++			};
++		};
++	};
++};
++
++&i2c4 {
++	status = "okay";
++	pinctrl-0 = <&i2c4m3_xfer>;
++
++    ov1385532: ov13855@10 {
++        compatible = "ovti,ov13855";
++        status = "okay";
++        reg = <0x10>;
++        clocks = <&cru CLK_MIPI_CAMERAOUT_M2>;
++        clock-names = "xvclk";
++        power-domains = <&power RK3576_PD_VI>;
++        pinctrl-names = "default";
++        pinctrl-0 = <&cam_clk2m0_clk2
++                     &cam2_pwdn
++                     &cam2_rst>;
++        //rockchip,grf = <&sys_grf>;
++        reset-gpios = <&gpio3 RK_PD6 GPIO_ACTIVE_HIGH>;
++        pwdn-gpios = <&gpio3 RK_PD4 GPIO_ACTIVE_HIGH>;
++        avdd-supply = <&vcc_mipicsi1>;
++        rockchip,camera-module-index = <0>;
++        rockchip,camera-module-facing = "back";
++        rockchip,camera-module-name = "CMK-OT2016-FV1";
++        rockchip,camera-module-lens-name = "default";
++        port {
++            ov13855_out3: endpoint {
++                remote-endpoint = <&mipi_in_ucam3>;
++                data-lanes = <1 2 3 4>;
++            };
++        };
++    };
++};
++
++&mipi3_csi2 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi3_csi2_input: endpoint@1 {
++				reg = <1>;
++				remote-endpoint = <&csidphy3_out>;
++			};
++		};
++
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi3_csi2_output: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&cif_mipi_in3>;
++			};
++		};
++	};
++};
++
++&rkcif_mipi_lvds3 {
++	status = "okay";
++
++	port {
++		cif_mipi_in3: endpoint {
++			remote-endpoint = <&mipi3_csi2_output>;
++		};
++	};
++};
++
++&rkcif_mipi_lvds3_sditf {
++	status = "okay";
++
++	port {
++		mipi3_lvds_sditf: endpoint {
++			remote-endpoint = <&isp_vir2>;
++		};
++	};
++};
++
++&rkisp_vir2 {
++	status = "okay";
++
++	port {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		isp_vir2: endpoint@0 {
++			reg = <0>;
++			remote-endpoint = <&mipi3_lvds_sditf>;
++		};
++	};
++};
++
++&rkcif {
++	status = "okay";
++};
++
++&rkcif_mmu {
++	status = "okay";
++};
++
++&rkisp {
++	status = "okay";
++};
++
++&rkisp_mmu {
++	status = "okay";
++};
++
++&rkvpss {
++	status = "okay";
++};
++
++&rkvpss_mmu {
++	status = "okay";
++};
++
++&rkvpss_vir3 {
++	status = "okay";
++};
++
++&pinctrl {
++    cam2 {
++       	mipicsi1_pwr: mipicsi1-pwr {
++			rockchip,pins =
++				/* camera power en */
++				<3 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>;
++		}; 
++
++        cam2_rst: cam2_rst {
++			rockchip,pins = 
++				/* camera reset */
++				<3 RK_PD6 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		cam2_pwdn: cam2_pwdn {
++			rockchip,pins = 
++				/* camera power down */
++				<3 RK_PD4 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++    };
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-full-typec-phy.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-full-typec-phy.dtsi
+new file mode 100755
+index 000000000000..e169571d6a2d
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-full-typec-phy.dtsi
+@@ -0,0 +1,153 @@
++/* power config */
++&{/} {
++    vbus5v0_typec: vbus5v0-typec {
++		compatible = "regulator-fixed";
++		regulator-name = "vbus5v0_typec";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		enable-active-high;
++		gpio = <&gpio2 RK_PB6 GPIO_ACTIVE_HIGH>;
++		vin-supply = <&vcc5v0_device>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&usb_otg0_pwren>;
++	};
++};
++
++/* cc chip fusb302 config */
++&i2c2 {
++	status = "okay";
++	usbc0: fusb302@22 {
++		compatible = "fcs,fusb302";
++		reg = <0x22>;
++		interrupt-parent = <&gpio0>;
++		interrupts = <RK_PB4 IRQ_TYPE_LEVEL_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&usbc0_int>;
++		vbus-supply = <&vbus5v0_typec>;
++		status = "okay";
++
++		port {
++			usbc0_role_sw: endpoint {
++				remote-endpoint = <&usb_drd0_role_switch>;
++			};
++		};
++
++		usb_con: connector {
++			compatible = "usb-c-connector";
++			label = "USB-C";
++			data-role = "dual";
++			power-role = "dual";
++			try-power-role = "sink";
++			op-sink-microwatt = <1000000>;
++			sink-pdos =
++				<PDO_FIXED(5000, 1000, PDO_FIXED_USB_COMM)>;
++			source-pdos =
++				<PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
++			mode-switch = <&dp>;
++
++			altmodes {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				altmode@0 {
++					reg = <0>;
++					svid = <0xff01>;
++					vdo = <0xffffffff>;
++				};
++			};
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++					usbc0_orien_sw: endpoint {
++						remote-endpoint = <&usbdp_phy_orientation_switch>;
++					};
++				};
++
++				port@1 {
++					reg = <1>;
++					dp_altmode_mux: endpoint {
++						remote-endpoint = <&usbdp_phy_dp_altmode_mux>;
++					};
++				};
++			};
++		};
++	};
++};
++
++/* type-c phy usb config */
++&usb_drd0_dwc3 {
++	dr_mode = "otg";
++	usb-role-switch;
++	port {
++		usb_drd0_role_switch: endpoint {
++			remote-endpoint = <&usbc0_role_sw>;
++		};
++	};
++};
++
++/* dp phy config */
++&usbdp_phy {
++	orientation-switch;
++	svid = <0xff01>;
++	/* neardi: type-c port sub1 & sub2 */
++	//sbu1-dc-gpios = <&gpio2 RK_PA6 GPIO_ACTIVE_HIGH>;
++	//sbu2-dc-gpios = <&gpio2 RK_PA7 GPIO_ACTIVE_HIGH>;
++	port {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		usbdp_phy_orientation_switch: endpoint@0 {
++			reg = <0>;
++			remote-endpoint = <&usbc0_orien_sw>;
++		};
++
++		usbdp_phy_dp_altmode_mux: endpoint@1 {
++			reg = <1>;
++			remote-endpoint = <&dp_altmode_mux>;
++		};
++	};
++};
++
++/* dp switch */
++&dp {
++	status = "okay";
++	svid = <0xff01>;
++};
++
++&dp0 {
++	status = "okay";
++};
++
++&dp0_in_vp0 {
++	status = "disabled";
++};
++
++&dp0_in_vp1 {
++	status = "disabled";
++};
++
++&dp0_in_vp2 {
++	status = "okay";
++};
++
++/* dp sound */
++&dp0_sound {
++	status = "okay";
++};
++
++/* pinctrl */
++&pinctrl {
++    typec_phy {
++        usbc0_int: usbc0-int {
++			rockchip,pins = <0 RK_PB4 RK_FUNC_GPIO &pcfg_pull_up>;
++	    };
++
++        usb_otg0_pwren: usb-otg0-pwren {
++			rockchip,pins = <2 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++    };
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-gmac.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-gmac.dtsi
+new file mode 100755
+index 000000000000..c9dc9d8f0af5
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-gmac.dtsi
+@@ -0,0 +1,72 @@
++&gmac0 {
++	/* Use rgmii-rxid mode to disable rx delay inside Soc */
++	phy-mode = "rgmii-rxid";
++	clock_in_out = "output";
++
++	snps,reset-gpio = <&gpio2 RK_PB3 GPIO_ACTIVE_LOW>;
++	snps,reset-active-low;
++	/* Reset time is 20ms, 100ms for rtl8211f */
++	snps,reset-delays-us = <0 20000 100000>;
++
++	pinctrl-names = "default";
++	pinctrl-0 = <&eth0m0_miim
++		     &eth0m0_tx_bus2
++		     &eth0m0_rx_bus2
++		     &eth0m0_rgmii_clk
++		     &eth0m0_rgmii_bus
++		     &ethm0_clk0_25m_out>;
++
++	tx_delay = <0x21>;
++	/* rx_delay = <0x3f>; */
++
++	phy-handle = <&rgmii_phy0>;
++	status = "okay";
++};
++
++&gmac1 {
++	/* Use rgmii-rxid mode to disable rx delay inside Soc */
++	phy-mode = "rgmii-rxid";
++	clock_in_out = "output";
++
++	snps,reset-gpio = <&gpio2 RK_PB4 GPIO_ACTIVE_LOW>;
++	snps,reset-active-low;
++	/* Reset time is 20ms, 100ms for rtl8211f */
++	snps,reset-delays-us = <0 20000 100000>;
++
++	pinctrl-names = "default";
++	pinctrl-0 = <&eth1m0_miim
++		     &eth1m0_tx_bus2
++		     &eth1m0_rx_bus2
++		     &eth1m0_rgmii_clk
++		     &eth1m0_rgmii_bus
++		     &ethm0_clk1_25m_out>;
++
++	tx_delay = <0x20>;
++	/* rx_delay = <0x3f>; */
++
++	phy-handle = <&rgmii_phy1>;
++	status = "okay";
++};
++
++&mdio0 {
++	rgmii_phy0: phy@1 {
++		compatible = "ethernet-phy-ieee802.3-c22";
++		/* neardi：warning yt8521 need boardcast address 0x0 */
++		reg = <0x0>;
++		clocks = <&cru REFCLKO25M_GMAC0_OUT>;
++	};
++};
++
++&mdio1 {
++	rgmii_phy1: phy@1 {
++		compatible = "ethernet-phy-ieee802.3-c22";
++		/* neardi：warning yt8521 need boardcast address 0x0 */
++		reg = <0x0>;
++		clocks = <&cru REFCLKO25M_GMAC1_OUT>;
++	};
++};
++
++&pinctrl {
++
++
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-hdmi.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-hdmi.dtsi
+new file mode 100755
+index 000000000000..90bc05995653
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-hdmi.dtsi
+@@ -0,0 +1,35 @@
++/* hdmi */
++&hdmi {
++	status = "okay";
++	enable-gpios = <&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
++	rockchip,sda-falling-delay-ns = <360>;
++};
++
++&hdmi_in_vp0 {
++	status = "okay";
++};
++
++&hdmi_in_vp1 {
++	status = "disabled";
++};
++
++&hdmi_in_vp2 {
++	status = "disabled";
++};
++
++&hdmi_in_vopl {
++	status = "disabled";
++};
++
++&hdptxphy_hdmi {
++	status = "okay";
++};
++
++&route_hdmi {
++	status = "okay";
++	connect = <&vp0_out_hdmi>;
++};
++
++&hdmi_sound {
++    status = "okay";
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-linux.dts b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-linux.dts
+new file mode 100755
+index 000000000000..5da1bb5855cc
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-linux.dts
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright (c) 2024 Rockchip Electronics Co., Ltd.
++ *
++ */
++
++/dts-v1/;
++
++#include "rk3576.dtsi"
++#include "rk3576-neardi-lz200.dtsi"
++#include "rk3576-linux.dtsi"
++#include "rk3576-neardi-lz200-hdmi.dtsi"
++#include "rk3576-neardi-lz200-gmac.dtsi"
++#include "rk3576-neardi-lz200-wifibt.dtsi"
++#include "rk3576-neardi-lz200-sound-ctl.dtsi"
++//#include "rk3576-neardi-lz200-mipi-dsi-to-lvds.dtsi"
++#include "rk3576-neardi-lz200-full-typec-phy.dtsi"
++#include "rk3576-neardi-lz200-misc-devices.dtsi"
++#include "rk3576-neardi-lz200-cam-dcphy0.dtsi"
++#include "rk3576-neardi-lz200-cam-dphy1.dtsi"
++#include "rk3576-neardi-lz200-cam-dphy3.dtsi"
++
++/ {
++	model = "Rockchip RK3576 EVB1 V10 Board";
++	compatible = "rockchip,rk3576-evb1-v10", "rockchip,rk3576";
++	/delete-node/ chosen;
++};
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-misc-devices.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-misc-devices.dtsi
+new file mode 100755
+index 000000000000..3692fa34d0a1
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-misc-devices.dtsi
+@@ -0,0 +1,103 @@
++/* pcie */
++&pcie0 {
++	reset-gpios = <&gpio2 RK_PB1 GPIO_ACTIVE_HIGH>;
++	rockchip,skip-scan-in-resume;
++	pinctrl-name = "default";
++	pinctrl-0 = <&pcie_rst>;
++	status = "okay";
++};
++/* pcie device power enable */
++&{/} {
++	pcie_dev_pwren: pcie_dev_pwren {
++		compatible = "regulator-fixed";
++		regulator-name = "Pcie_Pwren";
++		regulator-boot-on;
++		enable-active-high;
++		regulator-always-on;
++		gpio = <&gpio0 RK_PD3 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pwren_pcie>;
++	};
++};
++/* 4G power */
++&{/} {
++	vcc_lte_en: vcc_lte_en {
++		compatible = "regulator-fixed";
++		regulator-name = "Lte_Pwren";
++		regulator-boot-on;
++		enable-active-high;
++		regulator-always-on;
++		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pwren_lte>;
++	};
++};
++/* can */
++&can0 {
++	assigned-clocks = <&cru CLK_CAN0>;
++	assigned-clock-rates = <200000000>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&can0m0_pins>;
++	status = "okay";
++};
++/* 485 */
++&uart5 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart5m2_xfer>;
++};
++/* led */
++&{/} {
++	leds: leds {
++		compatible = "gpio-leds";
++		work_led: work {
++			gpios = <&gpio2 RK_PD7 GPIO_ACTIVE_HIGH>;
++			linux,default-trigger = "heartbeat";
++		};
++	};
++};
++/* usb type-A vbus */
++&{/} {
++	vcc_usb_vbus: vcc_usb_vbus {
++		compatible = "regulator-fixed";
++		regulator-name = "vbus_Pwren";
++		regulator-boot-on;
++		enable-active-high;
++		regulator-always-on;
++		gpio = <&gpio1 RK_PC7 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pwren_vbus>;
++	};
++};
++
++&gt1x {
++	status = "disabled";
++};
++
++&uart4 {
++	pinctrl-0 = <&uart4m1_xfer &uart4m1_ctsn &uart4m1_rtsn>;
++};
++
++&pinctrl {
++	lte {
++		pwren_lte: pwren_lte {
++			rockchip,pins = <0 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	pcie {
++		pcie_rst: pcie_rst {
++			rockchip,pins = <2 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		pwren_pcie: pwren_pcie {
++			rockchip,pins = <0 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	usb {
++		pwren_vbus: pwren_vbus {
++			rockchip,pins = <1 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-sound-ctl.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-sound-ctl.dtsi
+new file mode 100755
+index 000000000000..c64521fcee7b
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-sound-ctl.dtsi
+@@ -0,0 +1,80 @@
++&{/} {
++    es8388_sound: es8388-sound {
++		status = "okay";
++		compatible = "rockchip,multicodecs-card";
++		rockchip,card-name = "rockchip-es8388";
++		hp-det-gpio = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
++		io-channels = <&saradc 3>;
++		io-channel-names = "adc-detect";
++		keyup-threshold-microvolt = <1800000>;
++		poll-interval = <100>;
++		spk-con-gpio = <&gpio2 RK_PA7 GPIO_ACTIVE_LOW>;
++		hp-con-gpio = <&gpio2 RK_PA6 GPIO_ACTIVE_HIGH>;
++		rockchip,pre-power-on-delay-ms = <30>;
++		rockchip,post-power-down-delay-ms = <40>;
++		rockchip,format = "i2s";
++		rockchip,mclk-fs = <256>;
++		rockchip,cpu = <&sai1>;
++		rockchip,codec = <&es8388>;
++		rockchip,audio-routing =
++			"Headphone", "LOUT1",
++			"Headphone", "ROUT1",
++			"Speaker", "LOUT2",
++			"Speaker", "ROUT2",
++			"Headphone", "Headphone Power",
++			"Headphone", "Headphone Power",
++			"Speaker", "Speaker Power",
++			"Speaker", "Speaker Power",
++			"LINPUT1", "Main Mic",
++			"LINPUT2", "Main Mic",
++			"RINPUT1", "Headset Mic",
++			"RINPUT2", "Headset Mic";
++		pinctrl-names = "default";
++		pinctrl-0 = <&hp_det>;
++		play-pause-key {
++			label = "playpause";
++			linux,code = <KEY_PLAYPAUSE>;
++			press-threshold-microvolt = <2000>;
++		};
++	};
++};
++
++&i2c3 {
++	status = "okay";
++	es8388: es8388@10 {
++		status = "okay";
++		#sound-dai-cells = <0>;
++		compatible = "everest,es8388", "everest,es8323";
++		reg = <0x10>;
++		clocks = <&mclkout_sai1>;
++		clock-names = "mclk";
++		assigned-clocks = <&mclkout_sai1>;
++		assigned-clock-rates = <12288000>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&sai1m0_mclk>;
++	};
++};
++
++&sai1 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&sai1m0_lrck
++		     &sai1m0_sclk
++		     &sai1m0_sdi0
++		     &sai1m0_sdo2>;
++};
++/* headphone */
++
++/* spk */
++
++/* hdmi */
++
++/* dp */
++
++&pinctrl {
++    headphone {
++		hp_det: hp-det {
++			rockchip,pins = <2 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++}; 
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-wifibt.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-wifibt.dtsi
+new file mode 100755
+index 000000000000..71f8415db91c
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-wifibt.dtsi
+@@ -0,0 +1,60 @@
++
++&{/} {
++    sdio_pwrseq: sdio-pwrseq {
++		compatible = "mmc-pwrseq-simple";
++		pinctrl-names = "default";
++		pinctrl-0 = <&wifi_poweren_gpio>;
++
++		/*
++		 * On the module itself this is one of these (depending
++		 * on the actual card populated):
++		 * - SDIO_RESET_L_WL_REG_ON
++		 * - PDN (power down when low)
++		 */
++		post-power-on-delay-ms = <200>;
++		reset-gpios = <&gpio1 RK_PC6 GPIO_ACTIVE_LOW>;
++		status = "okay";
++	};
++
++    wireless_bluetooth: wireless-bluetooth {
++
++    };
++    /* for seekwave */
++	seekwcn_boot:seekwcn_boot {
++        compatible = "seekwave,sv6160";
++        dma_type = <1>;
++        status = "okay";
++        //skw_iram_path = "/lib/firmware/ROM_EXEC_KERNEL_IRAM.bin";
++        //skw_dram_path = "/lib/firmware/RAM_RW_KERNEL_DRAM.bin";
++        //seekwave_nv_name = "SEEKWAVE_NV_SWT6652.bin";
++    };
++};
++
++&sdio {
++	max-frequency = <200000000>;
++	no-sd;
++	no-mmc;
++	bus-width = <4>;
++	disable-wp;
++	cap-sd-highspeed;
++	cap-sdio-irq;
++	keep-power-in-suspend;
++	mmc-pwrseq = <&sdio_pwrseq>;
++	non-removable;
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc1m0_bus4 &sdmmc1m0_clk &sdmmc1m0_cmd>;
++	sd-uhs-sdr104;
++	status = "okay";
++};
++
++&pinctrl {
++    wireless-wlan {
++		wifi_host_wake_irq: wifi-host-wake-irq {
++			rockchip,pins = <0 RK_PB0 RK_FUNC_GPIO &pcfg_pull_down>;
++		};
++
++		wifi_poweren_gpio: wifi-poweren-gpio {
++			rockchip,pins = <1 RK_PC6 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++};
+\ No newline at end of file
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200.dtsi
+new file mode 100755
+index 000000000000..01603a876260
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200.dtsi
+@@ -0,0 +1,199 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright (c) 2024 Rockchip Electronics Co., Ltd.
++ *
++ */
++
++#include <dt-bindings/usb/pd.h>
++#include "rk3576-neardi.dtsi"
++#include "rk3576-rk806.dtsi"
++
++/ {
++	pdmics: dummy-codec {
++		status = "disabled";
++		compatible = "rockchip,dummy-codec";
++		#sound-dai-cells = <0>;
++	};
++
++	pdm_mic_array: pdm-mic-array {
++		status = "disabled";
++		compatible = "simple-audio-card";
++		simple-audio-card,name = "rockchip,pdm-mic-array";
++		simple-audio-card,cpu {
++			sound-dai = <&pdm1>;
++		};
++		simple-audio-card,codec {
++			sound-dai = <&pdmics>;
++		};
++	};
++
++	vcc_1v8_s0: vcc-1v8-s0 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_1v8_s0";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		vin-supply = <&vcc_1v8_s3>;
++	};
++
++	vcc_3v3_s0: vcc-3v3-s0 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_3v3_s0";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		vin-supply = <&vcc_3v3_s3>;
++	};
++
++	vcc_ufs_s0: vcc-ufs-s0 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_ufs_s0";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		vin-supply = <&vcc_sys>;
++	};
++
++	vcc1v8_ufs_vccq2_s0: vcc1v8-ufs-vccq2-s0 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc1v8_ufs_vccq2_s0";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		vin-supply = <&vcc_1v8_s3>;
++	};
++
++	vcc1v2_ufs_vccq_s0: vcc1v2-ufs-vccq-s0 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc1v2_ufs_vccq_s0";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <1200000>;
++		regulator-max-microvolt = <1200000>;
++		vin-supply = <&vcc_sys>;
++	};
++
++	vcc3v3_lcd_n: vcc3v3-lcd0-n {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc3v3_lcd0_n";
++		regulator-boot-on;
++		enable-active-high;
++		gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
++		vin-supply = <&vcc_3v3_s0>;
++	};
++
++	vcc5v0_host: vcc5v0-host {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc5v0_host";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		enable-active-high;
++		gpio = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
++		vin-supply = <&vcc5v0_device>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&usb_host_pwren>;
++	};
++};
++
++&combphy0_ps {
++	status = "okay";
++};
++
++&combphy1_psu {
++	status = "okay";
++};
++
++&i2c7 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c7m1_xfer>;
++
++
++	icm42607_acc: icm_acc@68 {
++		status = "okay";
++		compatible = "icm42607_acc";
++		reg = <0x68>;
++		irq-gpio = <&gpio1 RK_PD5 IRQ_TYPE_EDGE_RISING>;
++		irq_enable = <0>;
++		poll_delay_ms = <30>;
++		type = <SENSOR_TYPE_ACCEL>;
++		layout = <4>;
++	};
++
++	icm42607_gyro: icm_gyro@68 {
++		status = "okay";
++		compatible = "icm42607_gyro";
++		reg = <0x68>;
++		poll_delay_ms = <30>;
++		type = <SENSOR_TYPE_GYROSCOPE>;
++		layout = <4>;
++	};
++};
++
++/*
++ * mipidcphy0 needs to be enabled
++ * when dsi is enabled
++ */
++&mipidcphy0 {
++	status = "okay";
++};
++
++&pdm1 {
++	status = "disabled";
++	pinctrl-names = "default", "idle", "clk";
++	pinctrl-0 = <&pdm1m1_sdi0
++		     &pdm1m1_sdi1
++		     &pdm1m1_sdi2
++		     &pdm1m1_sdi3>;
++	pinctrl-1 = <&pdm1m1_clk0_idle
++		     &pdm1m1_clk1_idle>;
++	pinctrl-2 = <&pdm1m1_clk0
++		     &pdm1m1_clk1>;
++};
++
++&pinctrl {
++	usb {
++		usb_host_pwren: usb-host-pwren {
++			rockchip,pins = <0 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++};
++
++&spdif_tx3 {
++	status = "okay";
++};
++
++&ufs {
++	vcc-supply = <&vcc_ufs_s0>;
++	vccq-supply = <&vcc1v2_ufs_vccq_s0>;
++	vccq2-supply = <&vcc1v8_ufs_vccq2_s0>;
++	status = "okay";
++};
++
++&u2phy0_otg {
++	rockchip,typec-vbus-det;
++};
++
++&u2phy1_otg {
++	phy-supply = <&vcc5v0_host>;
++};
++
++&usb_drd1_dwc3 {
++	dr_mode = "host";
++	status = "okay";
++};
++
++&vp0 {
++	status = "okay";
++};
++
++&i2c1 {
++	pinctrl-names = "default";
++//	pinctrl-0 = <&i2c1m0_xfer_pullup>;
++};
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-neardi.dtsi b/arch/arm64/boot/dts/rockchip/rk3576-neardi.dtsi
+new file mode 100755
+index 000000000000..1e83a4419da9
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi.dtsi
+@@ -0,0 +1,471 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Copyright (c) 2024 Rockchip Electronics Co., Ltd.
++ *
++ */
++
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/pwm/pwm.h>
++#include <dt-bindings/pinctrl/rockchip.h>
++#include <dt-bindings/input/rk-input.h>
++#include <dt-bindings/display/drm_mipi_dsi.h>
++#include <dt-bindings/display/rockchip_vop.h>
++#include <dt-bindings/sensor-dev.h>
++#include "rk3576-neardi-input-keymap.dtsi"
++
++/ {
++	adc_keys: adc-keys {
++		compatible = "adc-keys";
++		io-channels = <&saradc 1>;
++		io-channel-names = "buttons";
++		keyup-threshold-microvolt = <1800000>;
++		poll-interval = <100>;
++
++		vol-up-key {
++			label = "volume up";
++			linux,code = <KEY_VOLUMEUP>;
++			press-threshold-microvolt = <17000>;
++		};
++
++		vol-down-key {
++			label = "volume down";
++			linux,code = <KEY_VOLUMEDOWN>;
++			press-threshold-microvolt = <417000>;
++		};
++
++		menu-key {
++			label = "menu";
++			linux,code = <KEY_MENU>;
++			press-threshold-microvolt = <890000>;
++		};
++
++		back-key {
++			label = "back";
++			linux,code = <KEY_BACK>;
++			press-threshold-microvolt = <1235000>;
++		};
++	};
++
++	backlight: backlight {
++		compatible = "pwm-backlight";
++		pwms = <&pwm1_6ch_1 0 25000 0>;
++		brightness-levels = <
++			  0  20  20  21  21  22  22  23
++			 23  24  24  25  25  26  26  27
++			 27  28  28  29  29  30  30  31
++			 31  32  32  33  33  34  34  35
++			 35  36  36  37  37  38  38  39
++			 40  41  42  43  44  45  46  47
++			 48  49  50  51  52  53  54  55
++			 56  57  58  59  60  61  62  63
++			 64  65  66  67  68  69  70  71
++			 72  73  74  75  76  77  78  79
++			 80  81  82  83  84  85  86  87
++			 88  89  90  91  92  93  94  95
++			 96  97  98  99 100 101 102 103
++			104 105 106 107 108 109 110 111
++			112 113 114 115 116 117 118 119
++			120 121 122 123 124 125 126 127
++			128 129 130 131 132 133 134 135
++			136 137 138 139 140 141 142 143
++			144 145 146 147 148 149 150 151
++			152 153 154 155 156 157 158 159
++			160 161 162 163 164 165 166 167
++			168 169 170 171 172 173 174 175
++			176 177 178 179 180 181 182 183
++			184 185 186 187 188 189 190 191
++			192 193 194 195 196 197 198 199
++			200 201 202 203 204 205 206 207
++			208 209 210 211 212 213 214 215
++			216 217 218 219 220 221 222 223
++			224 225 226 227 228 229 230 231
++			232 233 234 235 236 237 238 239
++			240 241 242 243 244 245 246 247
++			248 249 250 251 252 253 254 255
++		>;
++		default-brightness-level = <200>;
++	};
++
++	dp0_sound: dp0-sound {
++		status = "disabled";
++		compatible = "rockchip,hdmi";
++		rockchip,mclk-fs = <512>;
++		rockchip,card-name = "rockchip-dp0";
++		rockchip,cpu = <&spdif_tx3>;
++		rockchip,codec = <&dp0 1>;
++		rockchip,jack-det;
++	};
++
++	dp1_sound: dp1-sound {
++		status = "disabled";
++		compatible = "rockchip,hdmi";
++		rockchip,mclk-fs = <512>;
++		rockchip,card-name = "rockchip-dp1";
++		rockchip,cpu = <&spdif_tx3>;
++		rockchip,codec = <&dp1 1>;
++		rockchip,jack-det;
++	};
++
++	dp2_sound: dp2-sound {
++		status = "disabled";
++		compatible = "rockchip,hdmi";
++		rockchip,mclk-fs = <512>;
++		rockchip,card-name = "rockchip-dp2";
++		rockchip,cpu = <&spdif_tx3>;
++		rockchip,codec = <&dp2 1>;
++		rockchip,jack-det;
++	};
++
++	edp_sound: edp-sound {
++		status = "disabled";
++		compatible = "rockchip,hdmi";
++		rockchip,mclk-fs = <128>;
++		rockchip,card-name = "rockchip-edp";
++		rockchip,cpu = <&sai6>;
++		rockchip,codec = <&edp 0>;
++	};
++
++	hdmi_sound: hdmi-sound {
++		compatible = "rockchip,hdmi";
++		rockchip,mclk-fs = <128>;
++		rockchip,card-name = "rockchip-hdmi";
++		rockchip,cpu = <&sai6>;
++		rockchip,codec = <&hdmi>;
++		rockchip,jack-det;
++	};
++
++	test-power {
++		status = "okay";
++	};
++
++	vcc12v_dcin: vcc12v-dcin {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc12v_dcin";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <12000000>;
++		regulator-max-microvolt = <12000000>;
++	};
++
++	vcc_sys: vcc5v0-sys {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_sys";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&vcc12v_dcin>;
++	};
++
++	vcc5v0_device: vcc5v0-device {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc5v0_device";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&vcc12v_dcin>;
++	};
++
++	vcc_2v0_pldo_s3: vcc-2v0-pldo-s3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_2v0_pldo_s3";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <2000000>;
++		regulator-max-microvolt = <2000000>;
++		vin-supply = <&vcc_sys>;
++	};
++
++	vcc_1v1_nldo_s3: vcc-1v1-nldo-s3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_1v1_nldo_s3";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <1100000>;
++		regulator-max-microvolt = <1100000>;
++		vin-supply = <&vcc_sys>;
++	};
++
++	vcc3v3_rtc_s5: vcc3v3-rtc-s5 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc3v3_rtc_s5";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		vin-supply = <&vcc_sys>;
++	};
++};
++
++&combphy0_ps {
++	status = "okay";
++};
++
++&combphy1_psu {
++	status = "okay";
++};
++
++&cpu_l0 {
++	cpu-supply = <&vdd_cpu_lit_s0>;
++};
++
++&cpu_b0 {
++	cpu-supply = <&vdd_cpu_big_s0>;
++};
++
++&crypto {
++	status = "okay";
++};
++
++&display_subsystem {
++	clocks = <&hdptxphy_hdmi>;
++	clock-names = "hdmi0_phy_pll";
++};
++
++&gpu {
++	mali-supply = <&vdd_gpu_s0>;
++	status = "okay";
++};
++
++&i2c0 {
++	pinctrl-0 = <&i2c0m1_xfer>;
++	status = "okay";
++
++	gt1x: gt1x@14 {
++		status = "disabled";
++		compatible = "goodix,gt1x";
++		reg = <0x14>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&touch_gpio>;
++		goodix,rst-gpio = <&gpio0 RK_PD0 GPIO_ACTIVE_HIGH>;
++		goodix,irq-gpio = <&gpio0 RK_PC5 IRQ_TYPE_LEVEL_LOW>;
++	};
++};
++
++&i2c2 {
++	status = "okay";
++
++	hym8563: hym8563@51 {
++		compatible = "haoyu,hym8563";
++		reg = <0x51>;
++		#clock-cells = <0>;
++		clock-frequency = <32768>;
++		clock-output-names = "hym8563";
++		pinctrl-names = "default";
++		pinctrl-0 = <&hym8563_int>;
++		interrupt-parent = <&gpio0>;
++		interrupts = <RK_PA5 IRQ_TYPE_LEVEL_LOW>;
++		wakeup-source;
++	};
++};
++
++&iep {
++	status = "okay";
++};
++
++&iep_mmu {
++	status = "okay";
++};
++
++&jpegd {
++	status = "okay";
++};
++
++&jpege {
++	status = "okay";
++};
++
++&jpeg_mmu {
++	status = "okay";
++};
++
++&mpp_srv {
++	status = "okay";
++};
++
++&pinctrl {
++	hym8563 {
++		hym8563_int: hym8563-int {
++			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++
++	touch {
++		touch_gpio: touch-gpio {
++			rockchip,pins =
++				<0 RK_PD0 RK_FUNC_GPIO &pcfg_pull_up>,
++				<0 RK_PC5 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++};
++
++&pwm1_6ch_1 {
++	status = "okay";
++	pinctrl-0 = <&pwm1m0_ch1>;
++};
++
++&rga2_core0 {
++	status = "okay";
++};
++
++&rga2_core0_mmu {
++	status = "okay";
++};
++
++&rga2_core1 {
++	status = "okay";
++};
++
++&rga2_core1_mmu {
++	status = "okay";
++};
++
++&rknpu {
++	rknpu-supply = <&vdd_npu_s0>;
++	status = "okay";
++};
++
++&rknpu_mmu {
++	status = "okay";
++};
++
++&rkvenc_ccu {
++	status = "okay";
++};
++
++&rkvenc0 {
++	status = "okay";
++};
++
++&rkvenc0_mmu {
++	status = "okay";
++};
++
++&rkvenc1 {
++	status = "okay";
++};
++
++&rkvenc1_mmu {
++	status = "okay";
++
++};
++
++&rkvdec {
++	status = "okay";
++};
++
++&rkvdec_mmu {
++	status = "okay";
++};
++
++&rockchip_suspend {
++	status = "okay";
++	rockchip,sleep-debug-en = <1>;
++
++	rockchip,sleep-io-ret-config = <
++		(0
++		| RKPM_VCCIO3_RET_EN
++		)
++	>;
++
++	rockchip,regulator-on-before-mem = <&vdd_npu_s0>;
++};
++
++&sai6 {
++	status = "okay";
++};
++
++&saradc {
++	status = "okay";
++	vref-supply = <&vcca_1v8_s0>;
++};
++
++&sdhci {
++	bus-width = <8>;
++	no-sdio;
++	no-sd;
++	non-removable;
++	max-frequency = <200000000>;
++	mmc-hs400-1_8v;
++	mmc-hs400-enhanced-strobe;
++	full-pwr-cycle-in-suspend;
++	status = "okay";
++};
++
++&sdmmc {
++	max-frequency = <200000000>;
++	no-sdio;
++	no-mmc;
++	bus-width = <4>;
++	cap-mmc-highspeed;
++	cap-sd-highspeed;
++	disable-wp;
++	sd-uhs-sdr104;
++	vqmmc-supply = <&vccio_sd_s0>;
++	status = "disabled";
++};
++
++&tsadc {
++	status = "okay";
++};
++
++&u2phy0 {
++	status = "okay";
++};
++
++&u2phy1 {
++	status = "okay";
++};
++
++&u2phy0_otg {
++	status = "okay";
++};
++
++&u2phy1_otg {
++	status = "okay";
++};
++
++&uart4 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart4m1_xfer &uart4m1_ctsn>;
++};
++
++&ufs {
++	reset-gpios = <&gpio4 RK_PD0 GPIO_ACTIVE_HIGH>;
++};
++
++&usbdp_phy {
++	status = "okay";
++};
++
++&usbdp_phy_dp {
++	status = "okay";
++};
++
++&usbdp_phy_u3 {
++	status = "okay";
++};
++
++&usb_drd0_dwc3 {
++	status = "okay";
++};
++
++&vdpp {
++	status = "okay";
++};
++
++&vop {
++	status = "okay";
++	vop-supply = <&vdd_logic_s0>;
++};
++
++&vop_mmu {
++	status = "okay";
++};
++
++&vp2 {
++	assigned-clocks = <&cru DCLK_VP2_SRC>;
++	assigned-clock-parents = <&cru PLL_VPLL>;
++};
+-- 
+Created with Armbian build tools https://github.com/armbian/build
+

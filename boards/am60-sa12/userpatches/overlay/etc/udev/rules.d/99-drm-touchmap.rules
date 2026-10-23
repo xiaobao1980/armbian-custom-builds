@@ -1,0 +1,5 @@
+# drm 状态变化（插拔屏、HPD）时：切到用户会话重跑布局固定脚本。
+# 由布局脚本内部统一完成「重算矩阵 + 写 udev 规则 + 必要的触控 USB 重枚举」，
+# 避免这里先跑一次 touchscreen-map.sh 读到【旧】矩阵文件并提前 re-enum 触控，
+# 导致双次 re-enum 在 HDMI-1/HDMI-B-1 EDID 相同情况下把触控设备重新关联到错误输出。
+ACTION=="change", SUBSYSTEM=="drm", RUN+="/usr/local/sbin/am60-relayout-user.sh"

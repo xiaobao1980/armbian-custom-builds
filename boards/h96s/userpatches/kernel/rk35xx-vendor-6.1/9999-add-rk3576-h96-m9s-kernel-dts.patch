@@ -1,0 +1,800 @@
+From: Armbian H96 M9 adapter
+Date: Tue, 11 Aug 2026 18:30:00 +0800
+Subject: [PATCH] arm64: dts: rockchip: Add H96 MAX M9 (RK3576) device tree
+
+---
+ arch/arm64/boot/dts/rockchip/Makefile          |   1 +
+ .../boot/dts/rockchip/rk3576-h96-m9s.dts       | 781 ++++++++++++++++++
+ 2 files changed, 782 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/rockchip/rk3576-h96-m9s.dts
+
+--- a/arch/arm64/boot/dts/rockchip/Makefile
++++ b/arch/arm64/boot/dts/rockchip/Makefile
+@@ -1,1 +1,2 @@
+ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-evb1-v10.dtb
++dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-h96-m9s.dtb
+--- /dev/null	2026-08-12 10:12:17
++++ b/arch/arm64/boot/dts/rockchip/rk3576-h96-m9s.dts
+@@ -0,0 +1,782 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Device tree for H96 MAX M9 TV box based on Rockchip RK3576.
++ *
++ * Hardware highlights:
++ *  - Rockchip RK3576 (4x Cortex-A72 + 4x Cortex-A53)
++ *  - 4/8 GB LPDDR4/LPDDR4X
++ *  - 32/64/128 GB eMMC + microSD slot
++ *  - 1x Gigabit Ethernet (RTL8211F/RGMII)
++ *  - Ampak AP6275P SDIO WiFi / BT (2.4/5 GHz + BT 5.0)
++ *  - 1x USB 3.0 Type-A, 1x USB 2.0 Type-A, 1x USB Type-C (OTG)
++ *  - HDMI 2.0 output
++ *  - IR receiver, power LED, reset button
++ */
++
++/dts-v1/;
++
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/pwm/pwm.h>
++#include <dt-bindings/pinctrl/rockchip.h>
++#include <dt-bindings/input/rk-input.h>
++#include <dt-bindings/display/drm_mipi_dsi.h>
++#include <dt-bindings/display/rockchip_vop.h>
++#include <dt-bindings/usb/pd.h>
++#include "rk3576.dtsi"
++#include "rk3576-rk806.dtsi"
++#include "rk3576-linux.dtsi"
++
++/ {
++	model = "H96 MAX M9";
++	compatible = "h96,h96-max-m9", "rockchip,rk3576";
++
++	/delete-node/ chosen;
++
++	aliases {
++		mmc0 = &sdmmc;   /* microSD */
++		mmc1 = &sdio;    /* SDIO WiFi/BT */
++		mmc2 = &sdhci;   /* eMMC */
++	};
++
++	/* Reset / function button (verify GPIO on your board revision) */
++	gpio_keys: gpio-keys {
++		compatible = "gpio-keys";
++		pinctrl-names = "default";
++		pinctrl-0 = <&key1_pin>;
++
++		button@1 {
++			debounce-interval = <50>;
++			gpios = <&gpio0 RK_PD3 GPIO_ACTIVE_LOW>;
++			label = "GPIO Key Power";
++			linux,code = <BTN_1>;
++			wakeup-source;
++		};
++	};
++
++	/* Status LEDs (active low on most H96 revisions) */
++	gpio_leds: gpio-leds {
++		compatible = "gpio-leds";
++
++		work-green {
++			gpios = <&gpio0 RK_PD1 GPIO_ACTIVE_LOW>;
++			linux,default-trigger = "none";
++			default-state = "on";
++			retain-state-suspended;
++			retain-state-shutdown;
++		};
++
++		work-red {
++			gpios = <&gpio0 RK_PD0 GPIO_ACTIVE_LOW>;
++			linux,default-trigger = "none";
++			default-state = "off";
++			retain-state-suspended;
++			retain-state-shutdown;
++		};
++	};
++
++	hdmi_sound: hdmi-sound {
++		compatible = "rockchip,hdmi";
++		rockchip,mclk-fs = <128>;
++		rockchip,card-name = "HDMI Audio";
++		rockchip,cpu = <&sai6>;
++		rockchip,codec = <&hdmi>;
++		rockchip,jack-det;
++	};
++
++	/* HT5010 audio codec — I2S via SAI1, dummy codec (chip is self-managed) */
++	ht5010_sound_out: ht5010-sound-out {
++		compatible = "rockchip,dummy-codec";
++		clocks = <&mclkout_sai1>;
++		clock-names = "mclk";
++		pinctrl-names = "default";
++		pinctrl-0 = <&sai1m0_mclk>;
++		#sound-dai-cells = <0>;
++		status = "okay";
++	};
++
++	ht5010-sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,mclk-fs = <256>;
++		simple-audio-card,name = "3.5mm Audio";
++		simple-audio-card,format = "i2s";
++		status = "okay";
++
++		simple-audio-card,cpu {
++			sound-dai = <&sai1>;
++			dai-tdm-slot-num = <2>;
++			dai-tdm-slot-width = <32>;
++		};
++		simple-audio-card,codec {
++			sound-dai = <&ht5010_sound_out>;
++		};
++	};
++
++	/* SPDIF dummy transmitter codec */
++	spdif_tx0_dc: spdif-tx0-dc {
++		compatible = "linux,spdif-dit";
++		#sound-dai-cells = <0>;
++		status = "okay";
++	};
++
++	/* SPDIF sound card: spdif_tx1 → spdif dummy codec */
++	spdif-tx0-sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,mclk-fs = <128>;
++		simple-audio-card,name = "SPDIF Audio";
++		status = "okay";
++
++		simple-audio-card,cpu {
++			sound-dai = <&spdif_tx1>;
++		};
++		simple-audio-card,codec {
++			sound-dai = <&spdif_tx0_dc>;
++		};
++	};
++
++	/* SDIO WiFi/BT power sequencer */
++	sdio_pwrseq: sdio-pwrseq {
++		compatible = "mmc-pwrseq-simple";
++		pinctrl-names = "default";
++		pinctrl-0 = <&wifi_poweren_gpio>;
++		post-power-on-delay-ms = <200>;
++		reset-gpios = <&gpio1 RK_PC6 GPIO_ACTIVE_LOW>;
++	};
++
++	/* USB host 5V supply */
++	vcc5v0_host: vcc5v0-host {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc5v0_host";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		enable-active-high;
++		gpio = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&usb_host_pwren>;
++		vin-supply = <&vcc_sys>;
++	};
++
++	vcc_1v1_nldo_s3: vcc-1v1-nldo-s3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_1v1_nldo_s3";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <1100000>;
++		regulator-max-microvolt = <1100000>;
++		vin-supply = <&vcc_sys>;
++	};
++
++	vcc_2v0_pldo_s3: vcc-2v0-pldo-s3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_2v0_pldo_s3";
++		regulator-boot-on;
++		regulator-always-on;
++		regulator-min-microvolt = <2000000>;
++		regulator-max-microvolt = <2000000>;
++		vin-supply = <&vcc_sys>;
++	};
++
++	/* PCIe 2.0 3.3V supply (if populated) */
++	vcc_3v3_pcie20: vcc3v3-pcie20 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_3v3_pcie20";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		vin-supply = <&vcc_3v3_s3>;
++	};
++
++	/* microSD 3.3V supply */
++	vcc_3v3_sd_s0: vcc-3v3-sd-s0-regulator {
++		compatible = "regulator-fixed";
++		enable-active-high;
++		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		regulator-boot-on;
++		regulator-max-microvolt = <3300000>;
++		regulator-min-microvolt = <3300000>;
++		regulator-name = "vcc_3v3_sd_s0";
++		vin-supply = <&vcc_3v3_s3>;
++	};
++
++	/* Main 5V rail derived from 12V DC input */
++	vcc_sys: vcc5v0-sys {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_sys";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&vcc12v_dcin>;
++	};
++
++	vcc5v0_device: vcc5v0-device {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc5v0_device";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&vcc12v_dcin>;
++	};
++
++	vcc12v_dcin: vcc12v-dcin {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc12v_dcin";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <12000000>;
++		regulator-max-microvolt = <12000000>;
++	};
++
++	/* Bluetooth UART platform data for Broadcom AP6275P */
++	wireless_bluetooth: wireless-bluetooth {
++		compatible = "bluetooth-platdata";
++		uart_rts_gpios = <&gpio1 RK_PC2 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default", "rts_gpio";
++		pinctrl-0 = <&uart4m1_rtsn>;
++		pinctrl-1 = <&uart4_gpios>;
++		BT,reset_gpio = <&gpio1 RK_PC7 GPIO_ACTIVE_HIGH>;
++		BT,wake_gpio = <&gpio1 RK_PD4 GPIO_ACTIVE_HIGH>;
++		BT,wake_host_irq = <&gpio0 RK_PB1 GPIO_ACTIVE_HIGH>;
++		status = "okay";
++	};
++
++	/* SDIO WiFi platform data for Broadcom AP6275P */
++	wireless_wlan: wireless-wlan {
++		compatible = "wlan-platdata";
++		wifi_chip_type = "ap6275p";
++		pinctrl-names = "default";
++		pinctrl-0 = <&wifi_host_wake_irq>;
++		WIFI,host_wake_irq = <&gpio0 RK_PB0 GPIO_ACTIVE_HIGH>;
++		status = "okay";
++	};
++};
++
++&combphy0_ps {
++	status = "okay";
++	phy-supply = <&vcca_3v3_s0>;
++};
++
++&combphy1_psu {
++	status = "okay";
++};
++
++&cpu_b0 {
++	cpu-supply = <&vdd_cpu_big_s0>;
++};
++
++&cpu_l0 {
++	cpu-supply = <&vdd_cpu_lit_s0>;
++};
++
++&crypto {
++	status = "okay";
++};
++
++&display_subsystem {
++	clocks = <&hdptxphy_hdmi>;
++	clock-names = "hdmi0_phy_pll";
++};
++
++&gpu {
++	compatible = "arm,mali-bifrost";
++	reg = <0x00 0x27800000 0x00 0x20000>;
++	interrupts = <0x00 0x15b 0x04>,
++		     <0x00 0x15c 0x04>,
++		     <0x00 0x15d 0x04>;
++	interrupt-names = "job", "mmu", "gpu";
++	clock-names = "gpu", "bus";
++	mali-supply = <&vdd_gpu_s0>;
++	status = "okay";
++};
++
++&hdmi {
++	status = "okay";
++	cec-enable;
++	enable-gpios = <&gpio2 RK_PB0 GPIO_ACTIVE_HIGH>;
++};
++
++&hdmi_in_vp0 {
++	status = "okay";
++};
++
++&hdptxphy_hdmi {
++	status = "okay";
++	phy-supply = <&vdda_0v85_s0>;
++};
++
++/* PMIC / RTC I2C */
++&i2c0 {
++	pinctrl-0 = <&i2c0m1_xfer>;
++	status = "okay";
++};
++
++/* HYM8563 RTC on some revisions */
++&i2c2 {
++	status = "okay";
++
++	hym8563: hym8563@51 {
++		compatible = "haoyu,hym8563";
++		reg = <0x51>;
++		#clock-cells = <0>;
++		clock-frequency = <32768>;
++		clock-output-names = "hym8563";
++		pinctrl-names = "default";
++		pinctrl-0 = <&hym8563_int>;
++		interrupt-parent = <&gpio0>;
++		interrupts = <RK_PA5 IRQ_TYPE_LEVEL_LOW>;
++		wakeup-source;
++	};
++};
++
++&i2c5 {
++	status = "okay";
++	clock-frequency = <200000>;
++	pinctrl-0 = <&i2c5m3_xfer>;
++};
++
++&i2c8 {
++	clock-frequency = <200000>;
++	pinctrl-0 = <&i2c8m2_xfer>;
++};
++
++&iep {
++	status = "okay";
++};
++
++&iep_mmu {
++	status = "okay";
++};
++
++&jpeg_mmu {
++	status = "okay";
++};
++
++&jpegd {
++	status = "okay";
++};
++
++&jpege {
++	status = "okay";
++};
++
++&mpp_srv {
++	status = "okay";
++};
++
++/* GMAC0: RTL8211F RGMII gigabit ethernet */
++&gmac0 {
++	phy-mode = "rgmii-rxid";
++	clock_in_out = "output";
++
++	snps,reset-gpio = <&gpio2 RK_PB3 GPIO_ACTIVE_LOW>;
++	snps,reset-active-low;
++	snps,reset-delays-us = <0 20000 100000>;
++
++	pinctrl-names = "default";
++	pinctrl-0 = <&eth0m0_miim
++		     &eth0m0_tx_bus2
++		     &eth0m0_rx_bus2
++		     &eth0m0_rgmii_clk
++		     &eth0m0_rgmii_bus
++		     &ethm0_clk0_25m_out>;
++
++	tx_delay = <0x20>;
++
++	phy-handle = <&rgmii_phy0>;
++	status = "okay";
++};
++
++&mdio0 {
++	rgmii_phy0: phy@1 {
++		compatible = "ethernet-phy-ieee802.3-c22";
++		reg = <0x1>;
++		clocks = <&cru REFCLKO25M_GMAC0_OUT>;
++	};
++};
++
++&pinctrl {
++	gpio-key {
++		key1_pin: key1-pin {
++			rockchip,pins = <0 RK_PD3 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++
++	gpio-leds {
++		work_red: work-red {
++			rockchip,pins = <0 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		work_green: work-green {
++			rockchip,pins = <0 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	hym8563 {
++		hym8563_int: hym8563-int {
++			rockchip,pins = <0 RK_PA0 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++
++	usb {
++		usb_host_pwren: usb-host-pwren {
++			rockchip,pins = <0 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		usb_otg0_pwren: usb-otg0-pwren {
++			rockchip,pins = <0 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	wireless-bluetooth {
++		uart4_gpios: uart-gpios {
++			rockchip,pins = <1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	wireless-wlan {
++		wifi_host_wake_irq: wifi-host-wake-irq {
++			rockchip,pins = <0 RK_PB0 RK_FUNC_GPIO &pcfg_pull_down>;
++		};
++
++		wifi_poweren_gpio: wifi-poweren-gpio {
++			rockchip,pins = <1 RK_PC6 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++};
++
++&pwm0_2ch_1 {
++	status = "okay";
++};
++
++&pwm1_6ch_1 {
++	status = "okay";
++	pinctrl-0 = <&pwm1m0_ch1>;
++};
++
++/* IR receiver: H96 Max M9 uses a PWM-capture IR (NEC) wired to PWM0 channel 0.
++ * Decoded by the in-kernel rockchip_pwm_remotectl driver (CONFIG_ROCKCHIP_REMOTECTL_PWM=y).
++ * Key tables below carry several vendor usercodes; the H96 remote usually matches one
++ * of them. If not, enable /sys/module/rockchip_pwm_remotectl/parameters/code_print=1
++ * while pressing keys and capture the real USERCODE/RMC_GETDATA, then add a new ir_keyN. */
++&pwm0_2ch_0 {
++	compatible = "rockchip,remotectl-pwm-v4";
++	pinctrl-names = "default";
++	pinctrl-0 = <&pwm0m0_ch0>;
++	remote_pwm_id = <0>;
++	handle_cpu_id = <1>;
++	remote_support_psci = <0>;
++	wakeup-source;
++	status = "okay";
++
++	ir_key1 {
++		rockchip,usercode = <0xfeaa>;
++		rockchip,key_table = <0xec 0xe8 0xe6 0x9e 0xe9 0x67 0xe5 0x6c 0xae 0x69 0xaf 0x6a 0xee 0x66 0xe7 0x73 0xef 0x72 0xbf 0x74 0xbe 0x71 0xb3 0x8b 0xff 0x184 0xb1 0x18e 0xf2 0x18f 0xf3 0x04 0xb5 0x05 0xf6 0x06 0xf7 0x07 0xb9 0x190 0xfa 0x191 0xfb 0x0a 0xfe 0x0b 0xbd 0x0e 0xbc 0xb7 0xf0 0xba 0xb4 0x19c 0xb8 0x1e 0xb0 0x197>;
++	};
++
++	ir_key2 {
++		rockchip,usercode = <0xff00>;
++		rockchip,key_table = <0xf1 0x69 0xe5 0x6a 0xfc 0x67 0xfd 0x6c 0xf8 0xe8 0xf9 0xb8>;
++	};
++
++	ir_key3 {
++		rockchip,usercode = <0x1dcc>;
++		rockchip,key_table = <0xee 0xe8 0xf0 0x9e 0xf8 0x67 0xbb 0x6c 0xef 0x69 0xed 0x6a 0xfc 0x66 0xf1 0x73 0xfd 0x72 0xb7 0xd9 0xff 0x74 0xf3 0x71 0xbf 0x8b 0xf9 0x191 0xf5 0x192 0xb3 0x184 0xbe 0x02 0xba 0x03 0xb2 0x04 0xbd 0x05 0xf9 0x06 0xb1 0x07 0xfc 0x08 0xf8 0x09 0xb0 0x0a 0xb6 0x0b 0xb5 0x0e>;
++	};
++
++	ir_key4 {
++		rockchip,usercode = <0x7f80>;
++		rockchip,key_table = <0xec 0xe8 0xd8 0x9e 0xc7 0x67 0xbf 0x6c 0xc8 0x69 0xc6 0x6a 0x8c 0x66 0x78 0x73 0x76 0x72 0x7e 0x74 0x7c 0x8b 0xb7 0x184>;
++	};
++
++	ir_key5 {
++		rockchip,usercode = <0xfe01>;
++		rockchip,key_table = <0xec 0xe8 0xe6 0x9e 0xe9 0x67 0xe5 0x6c 0xae 0x69 0xaf 0x6a 0xee 0x66 0xe7 0x73 0xef 0x72 0xbf 0x74 0xbe 0x71 0xb3 0x8b 0xff 0x184 0xb1 0x02 0xf2 0x03 0xf3 0x04 0xb5 0x05 0xf6 0x06 0xf7 0x07 0xb9 0x08 0xfa 0x09 0xfb 0x0a 0xfe 0x0b 0xbd 0x0e 0xbc 0xb7 0xf0 0xba 0xb4 0x19c 0xb8 0x1e 0xb0 0x197>;
++	};
++
++	ir_key6 {
++		rockchip,usercode = <0xfd01>;
++		rockchip,key_table = <0x31 0xe8 0x2f 0x9e 0x35 0x67 0x2d 0x6c 0x66 0x69 0x3e 0x6a 0x6a 0x66 0x5e 0x73 0x47 0x72 0x23 0x74 0x3a 0x184 0x0d 0x40>;
++	};
++
++	ir_key7 {
++		rockchip,usercode = <0xfb04>;
++		rockchip,key_table = <0xf7 0x74 0xd0 0x184 0xb5 0x8b 0x5b 0xb8 0x4d 0xb7 0xba 0x67 0xb9 0x6c 0xb8 0x69 0xb7 0x6a 0xbb 0xe8 0xe5 0x9e 0xe4 0x0e 0xd2 0x66 0xfd 0x73 0xfc 0x72 0xf6 0x71 0xff 0x192 0xfe 0x193 0x04 0x40 0x14 0x41 0x4c 0x42 0x4b 0x43>;
++	};
++};
++
++&rga2_core0 {
++	status = "okay";
++};
++
++&rga2_core0_mmu {
++	status = "okay";
++};
++
++&rga2_core1 {
++	status = "okay";
++};
++
++&rga2_core1_mmu {
++	status = "okay";
++};
++
++&rknpu {
++	rknpu-supply = <&vdd_npu_s0>;
++	status = "okay";
++};
++
++&rknpu_mmu {
++	status = "okay";
++};
++
++&rkvdec {
++	status = "okay";
++};
++
++&rkvdec_mmu {
++	status = "okay";
++};
++
++&rkvenc_ccu {
++	status = "okay";
++};
++
++&rkvenc0 {
++	status = "okay";
++};
++
++&rkvenc0_mmu {
++	status = "okay";
++};
++
++&rkvenc1 {
++	status = "okay";
++};
++
++&rkvenc1_mmu {
++	status = "okay";
++};
++
++&rockchip_suspend {
++	status = "okay";
++	rockchip,sleep-debug-en = <1>;
++	rockchip,sleep-io-ret-config = <
++		(0
++		| RKPM_VCCIO3_RET_EN
++		)
++	>;
++	rockchip,regulator-on-before-mem = <&vdd_npu_s0>;
++};
++
++&route_hdmi {
++	status = "okay";
++	connect = <&vp0_out_hdmi>;
++};
++
++&sai6 {
++	status = "okay";
++};
++
++&saradc {
++	status = "okay";
++	vref-supply = <&vcca_1v8_s0>;
++};
++
++/* eMMC */
++&sdhci {
++	bus-width = <8>;
++	no-sdio;
++	no-sd;
++	non-removable;
++	max-frequency = <200000000>;
++	mmc-hs400-1_8v;
++	mmc-hs400-enhanced-strobe;
++	full-pwr-cycle-in-suspend;
++	status = "okay";
++};
++
++/* SDIO WiFi/BT */
++&sdio {
++	max-frequency = <200000000>;
++	no-sd;
++	no-mmc;
++	bus-width = <4>;
++	disable-wp;
++	cap-sd-highspeed;
++	cap-sdio-irq;
++	keep-power-in-suspend;
++	mmc-pwrseq = <&sdio_pwrseq>;
++	non-removable;
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc1m0_bus4 &sdmmc1m0_clk &sdmmc1m0_cmd>;
++	sd-uhs-sdr50;
++	sd-uhs-sdr104;
++	status = "okay";
++};
++
++/* microSD */
++&sdmmc {
++	max-frequency = <200000000>;
++	no-sdio;
++	no-mmc;
++	bus-width = <4>;
++	cap-mmc-highspeed;
++	cap-sd-highspeed;
++	disable-wp;
++	sd-uhs-sdr104;
++	vmmc-supply = <&vcc_3v3_sd_s0>;
++	vqmmc-supply = <&vccio_sd_s0>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc0_clk &sdmmc0_cmd &sdmmc0_det &sdmmc0_bus4>;
++	status = "okay";
++};
++
++/* SPDIF TX1: optical/coaxial digital audio output */
++&spdif_tx1 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&spdifm1_tx1>;
++};
++
++/* SAI1: I2S audio for HT5010 codec (3.5mm jack).
++ * The HT5010 codec's I2S data line is wired to SAI1 SDO2 ONLY - confirmed from the
++ * vendor Android DTS (sai1 pinctrl muxes lrck/sclk/sdi0/sdo2; no other SDO pin is
++ * muxed). The RK SAI IP resets to routing playback PATH0 -> SDO0, so without a
++ * reroute the stream never reaches the codec and the 3.5mm jack stays silent even
++ * though the sound card registers fine.
++ *
++ * rockchip,sai-tx-route = <0 1 0 3> feeds SDO2 from PATH0 (the array is indexed by
++ * SDO0..SDO3, each value = source PATH; see rockchip_sai_path_config()). It MUST
++ * hold exactly 4 u32 elements: rockchip_sai_path_prepare() counts them with
++ * of_count_phandle_with_args() and returns -EINVAL when num != MAX_LANES(4), which
++ * makes the whole SAI fail to probe ("The property size should be: 4" / "Failed to
++ * prepare TX path: -22") and the 3.5mm card never appears in aplay -l.
++ *
++ * The csc amixer oneshot service repeats this at runtime as a repair path
++ * ('Transmit SDO2 Source Select' = From PATH0) and, importantly, forces
++ * 'Transmit SDOx Select' back to Auto. That control is NOT a pin selector - it is
++ * the TX LANE COUNT (-> sai->tx_lanes), and any value above the channel count makes
++ * ch_per_lane = channels/lanes = 0 -> bclk_rate = 0 -> hw_params dies with
++ * "Mismatch mclk: 12288000, expected 0". Never pin it to SDOx3.
++ *
++ * The lane count is pinned to 1 via rockchip,tdm-tx-lanes = <1>.  This is
++ * safe once rockchip_sai_init_dai() caps playback.channels_max to lanes*2
++ * (see 0001-rockchip-sai-cap-dai-channels-by-tdm-lanes.patch).  Without
++ * that kernel patch, tdm-tx-lanes=<1> makes the vendor kernel mis-compute
++ * bclk (64ch * 1 lane -> bclk overflow).  With the patch, it both fixes the
++ * max channel advertisement and keeps 2ch playback working.
++ */
++&sai1 {
++	status = "okay";
++	rockchip,sai-tx-route = <0 1 0 3>;	/* SDO2 <- PATH0 (playback) */
++	rockchip,tdm-tx-lanes = <1>;		/* force 1 TX lane / stereo max */
++	rockchip,tdm-rx-lanes = <1>;		/* cap capture at 2ch: PW 1.4 probes capture at 64ch -> same mclk overflow */
++	pinctrl-names = "default";
++	pinctrl-0 = <&sai1m0_lrck
++		     &sai1m0_sclk
++		     &sai1m0_sdi0
++		     &sai1m0_sdo2>;
++};
++
++/* MCLK output for HT5010 codec */
++&mclkout_sai1 {
++	status = "okay";
++};
++
++&tsadc {
++	status = "okay";
++};
++
++/* USB 2.0 host + OTG */
++&u2phy0 {
++	status = "okay";
++	phy-supply = <&vcc5v0_host>;
++};
++
++&u2phy0_otg {
++	status = "okay";
++	phy-supply = <&vcc5v0_host>;
++};
++
++/* UART4: Bluetooth */
++&uart4 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart4m1_xfer &uart4m1_ctsn>;
++	status = "okay";
++};
++
++/* UART5: debug / expansion */
++&uart5 {
++	status = "okay";
++};
++
++&u2phy0 {
++	status = "okay";
++};
++
++&u2phy0_otg {
++	vbus-supply = <&vcc5v0_host>;
++	status = "okay";
++};
++
++&usb_drd0_dwc3 {
++	dr_mode = "host";
++	status = "okay";
++};
++
++/* USB 3.0 + DisplayPort combo PHY */
++&usbdp_phy {
++	rockchip,dp-lane-mux = <2 3>;
++	status = "okay";
++};
++
++&usbdp_phy_dp {
++	status = "disabled";
++};
++
++&usbdp_phy_u3 {
++	status = "okay";
++};
++
++&u2phy1 {
++	status = "okay";
++};
++
++&u2phy1_otg {
++	phy-supply = <&vcc5v0_host>;
++	status = "okay";
++};
++
++&usb_drd1_dwc3 {
++	dr_mode = "host";
++	status = "okay";
++};
++
++&vdpp {
++	status = "okay";
++};
++
++&vop {
++	status = "okay";
++	vop-supply = <&vdd_logic_s0>;
++};
++
++&vop_mmu {
++	status = "okay";
++};
++
++&vp0 {
++	status = "okay";
++};
++
++&vp1 {
++	status = "okay";
++};
++
++&wdt {
++	status = "okay";
++};

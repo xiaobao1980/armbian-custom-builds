@@ -1,0 +1,37 @@
+# Plan B: 把 Type-C(dw-dp/dp0) 的 DRM 连接器类型 DisplayPort(10) -> HDMIB(12)
+# 目的：让 Type-C 在 mutter 排序里排最后 -> GNOME 角标 大屏HDMI-1=1 / 前置HDMI-2=2 / Type-C=3
+# 注意：dw-dp.c 里 s->output_type = DRM_MODE_CONNECTOR_DisplayPort 的 4 处【不能改】，
+#       VOP2 用它判定要求精确像素时钟，改了 4K@30 会被 MODE_CLOCK_RANGE 拒掉。
+
+--- a/drivers/gpu/drm/rockchip/dw-dp.c
++++ b/drivers/gpu/drm/rockchip/dw-dp.c
+@@ -4692,7 +4692,7 @@
+ 
+ 	ret = drm_connector_init(bridge->dev, connector,
+ 				 &dw_dp_connector_funcs,
+-				 DRM_MODE_CONNECTOR_DisplayPort);
++				 DRM_MODE_CONNECTOR_HDMIB);
+ 	if (ret) {
+ 		DRM_DEV_ERROR(dp->dev, "Failed to initialize connector\n");
+ 		return ret;
+@@ -6538,7 +6538,7 @@
+ 	dp->bridge.funcs = &dw_dp_bridge_funcs;
+ 	dp->bridge.ops = DRM_BRIDGE_OP_DETECT | DRM_BRIDGE_OP_EDID |
+ 			 DRM_BRIDGE_OP_HPD;
+-	dp->bridge.type = DRM_MODE_CONNECTOR_DisplayPort;
++	dp->bridge.type = DRM_MODE_CONNECTOR_HDMIB;
+ 
+ 	platform_set_drvdata(pdev, dp);
+ 
+--- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
++++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+@@ -11070,7 +11070,8 @@
+ 	drm_for_each_connector_iter(connector, &conn_iter) {
+ 		if ((new_crtc_state->connector_mask & drm_connector_mask(connector)) &&
+ 		    ((connector->connector_type == DRM_MODE_CONNECTOR_DisplayPort) ||
+-		     (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA))) {
++		     (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA) ||
++		     (connector->connector_type == DRM_MODE_CONNECTOR_HDMIB))) {
+ 			drm_connector_list_iter_end(&conn_iter);
+ 			return true;
+ 		}

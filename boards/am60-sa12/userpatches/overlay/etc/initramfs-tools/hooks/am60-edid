@@ -1,0 +1,23 @@
+#!/bin/sh
+# Initramfs hook: bundle the AM60 IFP 4K@30 EDID into the early initramfs
+# so the builtin dw_hdmi_qp driver can load drm.edid_firmware at FIRST probe
+# (before the real rootfs is mounted). Without this, the first HDMI probe
+# (at initramfs stage) cannot request_firmware the EDID and the panel falls
+# back to the wrong resolution.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+  prereqs) prereqs; exit 0 ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+mkdir -p "$DESTDIR/lib/firmware/edid"
+for f in am60-ifp.bin am60-ifp-b1.bin; do
+    if [ -f "/lib/firmware/edid/$f" ]; then
+        cp "/lib/firmware/edid/$f" "$DESTDIR/lib/firmware/edid/$f"
+        echo "am60-edid-hook: copied $f into initramfs"
+    else
+        echo "am60-edid-hook: WARNING /lib/firmware/edid/$f missing, skip"
+    fi
+done

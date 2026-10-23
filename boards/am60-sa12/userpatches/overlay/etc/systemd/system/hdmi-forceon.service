@@ -1,0 +1,11 @@
+[Unit]
+Description=Force AM60 HDMI/DP connectors on (panels do not assert HPD/EDID)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/hdmi-forceon.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=RT5616 3.5mm headphone route init (CM3588-NAS)
+After=sound.target alsa-restore.service
+Wants=sound.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rt5616-audio-init.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,63 @@
+From: H96 M9 Audio Fix <fix@h96m9.local>
+Date: Sat, 29 Aug 2026 00:30:00 +0800
+Subject: [PATCH] rockchip: sai: bound DAI rate and cap channels_max by tdm-lanes
+
+The RK SAI driver advertises playback/capture.channels_max = 512.
+When the CPU DAI is paired with rockchip,dummy-codec (channels_max = 384),
+ASoC reports a link that can carry up to 64 channels on some vendor
+kernels.  PulseAudio/WirePlumber clients then open hw_params with 64
+channels, which makes rockchip_sai_hw_params() compute
+  bclk = fw_ratio * slot_width * (channels / lanes) * rate
+With slot_width=32, lanes=1 and channels=64 this gives bclk = 98.304 MHz,
+far above the 12.288 MHz mclk -> "Mismatch mclk: ... at least 98304000"
+and hw_params fails.
+
+For boards where the physical codec is stereo-only (e.g. H96 M9 HT5010
+3.5mm jack on SAI1 SDO2), the real max channel count is lanes*2.  When
+rockchip,tdm-tx-lanes / rockchip,tdm-rx-lanes are explicitly set in DT,
+cap playback/capture channels_max accordingly so ALSA/PipeWire never
+offer more channels than the hardware can actually use.
+
+Signed-off-by: H96 M9 Audio Fix <fix@h96m9.local>
+---
+ sound/soc/rockchip/rockchip_sai.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+--- a/sound/soc/rockchip/rockchip_sai.c
++++ b/sound/soc/rockchip/rockchip_sai.c
+@@ -1230,6 +1230,18 @@
+ 		dai->playback.channels_min = 1;
+ 		dai->playback.channels_max = 512;
+ 		dai->playback.rates = SNDRV_PCM_RATE_CONTINUOUS;
++		dai->playback.rate_min = 8000;
++		dai->playback.rate_max = 384000;
++		/*
++		 * If DT pins the lane count, advertise a matching max channel
++		 * count.  rockchip_sai_lanes_auto() picks 1 lane per stereo pair,
++		 * so tx_lanes*2 is the practical maximum for I2S/TDM stereo use.
++		 * Without this, dummy-codec's 384ch max makes ALSA expose 64ch,
++		 * and PipeWire/PA clients open with 64ch -> bclk overflow.
++		 */
++		if (sai->tx_lanes > 0 &&
++		    dai->playback.channels_max > sai->tx_lanes * 2)
++			dai->playback.channels_max = sai->tx_lanes * 2;
+ 		dai->playback.formats = SNDRV_PCM_FMTBIT_S8 |
+ 					SNDRV_PCM_FMTBIT_S16_LE |
+ 					SNDRV_PCM_FMTBIT_S24_LE |
+@@ -1246,6 +1258,15 @@
+ 		dai->capture.channels_min = 1;
+ 		dai->capture.channels_max = 512;
+ 		dai->capture.rates = SNDRV_PCM_RATE_CONTINUOUS;
++		dai->capture.rate_min = 8000;
++		dai->capture.rate_max = 384000;
++		/*
++		 * Same as playback: if rx_lanes is pinned in DT, cap the
++		 * advertised max channels to lanes*2.
++		 */
++		if (sai->rx_lanes > 0 &&
++		    dai->capture.channels_max > sai->rx_lanes * 2)
++			dai->capture.channels_max = sai->rx_lanes * 2;
+ 		dai->capture.formats = SNDRV_PCM_FMTBIT_S8 |
+ 				       SNDRV_PCM_FMTBIT_S16_LE |
+ 				       SNDRV_PCM_FMTBIT_S24_LE |
+

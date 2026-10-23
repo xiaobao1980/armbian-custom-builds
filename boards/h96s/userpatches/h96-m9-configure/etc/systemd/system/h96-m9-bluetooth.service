@@ -1,0 +1,28 @@
+[Unit]
+Description=H96 MAX M9 (RK3576) RTL8723DS UART Bluetooth (hciattach ttyS4)
+Documentation=https://docs.armbian.com/
+# Wait for the UART tty to exist, and bring BT up before bluetoothd tries.
+After=dev-ttyS4.device
+Wants=dev-ttyS4.device
+Before=bluetooth.service
+ConditionPathExists=/usr/bin/hciattach
+
+[Service]
+Type=simple
+# -n: run in foreground (do NOT daemonize) so systemd supervises the process.
+ExecStart=/usr/bin/hciattach -n -s 1500000 /dev/ttyS4 any 1500000 flow nosleep
+Restart=on-failure
+RestartSec=2
+# hci0 shows up only after hciattach has installed the HCI line discipline, and
+# the Rockchip rfkill-bt platform device ("bt_default") as well as hci0 itself
+# come up SOFT-BLOCKED by default. Without this, `hciconfig hci0 up` fails with
+# "Operation not possible due to RF-kill (132)" and bluetoothd reports
+# "Powered: no" even though the UART attach succeeded.
+#
+# Retry because /sys/class/bluetooth/hci0 is not instant: poll up to ~10s, then
+# unblock once more as a final sweep. Leading "-" + exit 0 keep a missing
+# rfkill binary from failing the unit.
+ExecStartPost=-/bin/sh -c 'RFK=""; for p in /usr/sbin/rfkill /usr/bin/rfkill /sbin/rfkill; do [ -x "$p" ] && RFK="$p" && break; done; i=0; while [ $i -lt 20 ]; do [ -n "$RFK" ] && "$RFK" unblock bluetooth; [ -e /sys/class/bluetooth/hci0 ] && break; i=$((i+1)); sleep 0.5; done; [ -n "$RFK" ] && "$RFK" unblock bluetooth; exit 0'
+
+[Install]
+WantedBy=multi-user.target

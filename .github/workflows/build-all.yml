@@ -1,0 +1,87 @@
+name: Build All Boards (矩阵)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_ref:
+        description: "armbian/build 引用 (分支/标签)"
+        required: false
+        default: "master"
+        type: string
+      boards:
+        description: "参与构建的板卡 (逗号分隔, 留空 = 全部)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      boards: ${{ steps.gen.outputs.boards }}
+    steps:
+      - id: gen
+        run: |
+          ALL='["aio-3288c","h96-m9","h96s","am60-sa12","neardi-lz200"]'
+          IN="${{ inputs.boards }}"
+          if [ -n "$IN" ]; then
+            echo "boards=$(echo "$IN" | tr ',' '\n' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          else
+            echo "boards=$ALL" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        board: ${{ fromJson(needs.matrix.outputs.boards) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          toolchain: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Clone armbian/build (${{ inputs.build_ref }})
+        run: |
+          git clone --depth=1 --branch "${{ inputs.build_ref }}" \
+            https://github.com/armbian/build armbian-build
+
+      - name: 同步板卡自定义文件
+        run: bash scripts/sync-board-to-build.sh "${{ matrix.board }}" armbian-build
+
+      - name: 组装构建参数
+        id: args
+        run: |
+          # shellcheck disable=SC1091
+          source "boards/${{ matrix.board }}/build.env"
+          echo "args=BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}" >> "$GITHUB_OUTPUT"
+
+      - name: 编译镜像
+        run: |
+          cd armbian-build
+          sudo ./compile.sh build \
+            ${{ steps.args.outputs.args }} \
+            KERNEL_CONFIGURE=no \
+            COMPRESS_OUTPUTIMAGE=sha,img
+
+      - name: 上传镜像产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: armbian-${{ matrix.board }}-${{ github.run_number }}
+          path: |
+            armbian-build/output/images/**/*.img.xz
+            armbian-build/output/images/**/*.sha
+          if-no-files-found: error
+          retention-days: 14

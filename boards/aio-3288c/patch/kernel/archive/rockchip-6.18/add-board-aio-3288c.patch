@@ -1,0 +1,857 @@
+diff -uNr a/arch/arm/boot/dts/rockchip/Makefile b/arch/arm/boot/dts/rockchip/Makefile
+--- a/arch/arm/boot/dts/rockchip/Makefile	2026-07-19 11:45:52.141299224 +0800
++++ b/arch/arm/boot/dts/rockchip/Makefile	2026-07-19 11:45:52.155299779 +0800
+@@ -20,6 +20,7 @@
+ 	rk3228-evb.dtb \
+ 	rk3229-evb.dtb \
+ 	rk3229-xms6.dtb \
++	rk3288-aio-3288c.dtb \
+ 	rk3288-evb-act8846.dtb \
+ 	rk3288-evb-rk808.dtb \
+ 	rk3288-firefly-beta.dtb \
+diff --git a/arch/arm/boot/dts/rockchip/rk3288-aio-3288c.dts b/arch/arm/boot/dts/rockchip/rk3288-aio-3288c.dts
+new file mode 100644
+diff --git a/arch/arm/boot/dts/rockchip/rk3288-aio-3288c.dts b/arch/arm/boot/dts/rockchip/rk3288-aio-3288c.dts
+new file mode 100644
+--- /dev/null
++++ b/arch/arm/boot/dts/rockchip/rk3288-aio-3288c.dts
+@@ -0,0 +1,839 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Firefly AIO-3288C (RK3288) board device tree for mainline kernel.
++ *
++ * Ported from Firefly Linux SDK 4.4 device tree:
++ *   rk3288-firefly-aio.dts + rk3288-firefly-port.dtsi + rk3288-linux.dtsi
++ * All vendor-only bindings (wlan-platdata, bluetooth-platdata,
++ * remotectl-pwm, rockchip,dmc, fiq-debugger, drm-logo, route nodes ...)
++ * have been replaced with their mainline equivalents.
++ */
++
++/dts-v1/;
++
++#include "rk3288.dtsi"
++#include <dt-bindings/input/input.h>
++#include <dt-bindings/pinctrl/rockchip.h>
++
++/ {
++	model = "Firefly AIO-3288C";
++	compatible = "firefly,aio-3288c", "rockchip,rk3288";
++
++	chosen {
++		stdout-path = "serial2:115200n8";
++	};
++
++	memory@0 {
++		device_type = "memory";
++		reg = <0x0 0x0 0x0 0x80000000>;
++	};
++
++	/* Recovery/Upgrade key (SARADC channel 1) */
++	adc-keys {
++		compatible = "adc-keys";
++		io-channels = <&saradc 1>;
++		keyup-threshold-microvolt = <1800000>;
++
++		volup-key {
++			linux,code = <KEY_VOLUMEUP>;
++			label = "volume up";
++			press-threshold-microvolt = <18000>;
++		};
++	};
++
++	ext_gmac: external-gmac-clock {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <125000000>;
++		clock-output-names = "ext_gmac";
++	};
++
++	/* IR receiver on GPIO7_A0 (vendor kernel used remotectl-pwm on pwm0) */
++	ir: ir-receiver {
++		compatible = "gpio-ir-receiver";
++		gpios = <&gpio7 0 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&ir_int>;
++	};
++
++	keys: gpio-keys {
++		compatible = "gpio-keys";
++		autorepeat;
++
++		power {
++			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
++			linux,code = <KEY_POWER>;
++			label = "GPIO Key Power";
++			gpio-key,wakeup;
++			debounce-interval = <100>;
++			pinctrl-names = "default";
++			pinctrl-0 = <&pwrbtn>;
++		};
++
++		user {
++			gpios = <&gpio7 9 GPIO_ACTIVE_LOW>;
++			linux,code = <KEY_A>;
++			label = "GPIO Key A";
++			debounce-interval = <100>;
++			pinctrl-names = "default";
++			pinctrl-0 = <&keyabtn>;
++		};
++	};
++
++	leds {
++		compatible = "gpio-leds";
++
++		work {
++			label = "firefly:blue:work";
++			gpios = <&gpio8 6 GPIO_ACTIVE_HIGH>;
++			default-state = "on";
++			pinctrl-names = "default";
++			pinctrl-0 = <&led_power>;
++		};
++
++		user {
++			label = "firefly:yellow:user";
++			gpios = <&gpio8 1 GPIO_ACTIVE_LOW>;
++			default-state = "off";
++			pinctrl-names = "default";
++			pinctrl-0 = <&led_user>;
++		};
++	};
++
++	/* AP6212 (BCM43430A1) WiFi power sequence, WL_REG_ON = GPIO4_D4 */
++	sdio_pwrseq: sdio-pwrseq {
++		compatible = "mmc-pwrseq-simple";
++		clocks = <&hym8563>;
++		clock-names = "ext_clock";
++		pinctrl-names = "default";
++		pinctrl-0 = <&wifi_enable_h>;
++		reset-gpios = <&gpio4 28 GPIO_ACTIVE_LOW>;
++	};
++
++	/* ES8323 analog audio (I2S0) */
++	sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,format = "i2s";
++		simple-audio-card,name = "ROCKCHIP,ES8323";
++		simple-audio-card,mclk-fs = <512>;
++		simple-audio-card,widgets =
++			"Microphone", "Mic Jack",
++			"Headphone", "Headphone Jack",
++			"Speaker", "External Speaker";
++		simple-audio-card,routing =
++			"LINPUT1", "Mic Jack",
++			"RINPUT1", "Mic Jack",
++			"Mic Jack", "Mic Bias",
++			"Headphone Jack", "LOUT2",
++			"Headphone Jack", "ROUT2",
++			"External Speaker", "LOUT1",
++			"External Speaker", "ROUT1";
++
++		simple-audio-card,cpu {
++			sound-dai = <&i2s>;
++		};
++
++		simple-audio-card,codec {
++			sound-dai = <&es8323>;
++		};
++	};
++
++	/* HDMI audio (I2S0 -> dw-hdmi) */
++	sound_hdmi: sound-hdmi {
++		compatible = "simple-audio-card";
++		simple-audio-card,format = "i2s";
++		simple-audio-card,name = "ROCKCHIP,HDMI";
++
++		simple-audio-card,cpu {
++			sound-dai = <&i2s>;
++		};
++
++		simple-audio-card,codec {
++			sound-dai = <&hdmi>;
++		};
++	};
++
++	spdif_out: spdif-out {
++		compatible = "linux,spdif-dit";
++		#sound-dai-cells = <0>;
++	};
++
++	spdif-sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,name = "ROCKCHIP,SPDIF";
++
++		simple-audio-card,cpu {
++			sound-dai = <&spdif>;
++		};
++
++		simple-audio-card,codec {
++			sound-dai = <&spdif_out>;
++		};
++	};
++
++	vcc_sys: vsys-regulator {
++		compatible = "regulator-fixed";
++		enable-active-high;
++		gpio = <&gpio0 13 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pwr5v_en>;
++		regulator-name = "vcc_sys";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	vcc_sd: sdmmc-regulator {
++		compatible = "regulator-fixed";
++		gpio = <&gpio7 11 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&sdmmc_pwr>;
++		regulator-name = "vcc_sd";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		startup-delay-us = <100000>;
++		vin-supply = <&vcc_io>;
++	};
++
++	vcc_flash: flash-regulator {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_flash";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		regulator-always-on;
++		regulator-boot-on;
++		vin-supply = <&vcc_io>;
++	};
++
++	/* 板载外设 5V 总使能 (与 4.4 BSP 一致: gpio7_3 常开)。
++	 * 4.4 里 vcc_host_5v / vcc_otg_5v 直连此常驻 5V 轨、无 vin 依赖。 */
++	vcc_sys_5v: vcc-sys-5v {
++		compatible = "regulator-fixed";
++		enable-active-high;
++		gpio = <&gpio7 3 GPIO_ACTIVE_HIGH>;
++		regulator-name = "vcc_sys_5v";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	vcc_host_5v: usb-host-regulator {
++		compatible = "regulator-fixed";
++		enable-active-high;
++		gpio = <&gpio0 14 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&host_vbus_drv>;
++		regulator-name = "vcc_host_5v";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		regulator-always-on;
++	};
++
++	vcc_otg_5v: usb-otg-regulator {
++		compatible = "regulator-fixed";
++		enable-active-high;
++		gpio = <&gpio0 12 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&otg_vbus_drv>;
++		regulator-name = "vcc_otg_5v";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		regulator-always-on;
++	};
++
++	vcc28_dvp: vcc28-dvp-regulator {
++		compatible = "regulator-fixed";
++		enable-active-high;
++		gpio = <&gpio0 11 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&dvp_pwr>;
++		regulator-name = "vcc28_dvp";
++		regulator-min-microvolt = <2800000>;
++		regulator-max-microvolt = <2800000>;
++		regulator-always-on;
++		vin-supply = <&vcc_io>;
++	};
++
++	dovdd_1v8: dovdd-1v8-regulator {
++		compatible = "regulator-fixed";
++		regulator-name = "dovdd_1v8";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		regulator-always-on;
++		regulator-boot-on;
++		vin-supply = <&vcc28_dvp>;
++	};
++
++	vccadc_ref: vccadc-ref {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc1v8_sys";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	/*
++	 * Speaker amplifier enable (SPK_CTL, GPIO7_A6, active low).
++	 * The vendor es8323 driver toggled this pin via spk-ctl-gpio;
++	 * mainline driver has no GPIO support, so keep the amp enabled.
++	 */
++	vcc_spk: vcc-spk-regulator {
++		compatible = "regulator-fixed";
++		gpio = <&gpio7 6 GPIO_ACTIVE_LOW>;
++		regulator-name = "vcc_spk";
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	/* Headphone amplifier enable (HP_CTL, GPIO0_B2, active high) */
++	vcc_hp: vcc-hp-regulator {
++		compatible = "regulator-fixed";
++		enable-active-high;
++		gpio = <&gpio0 10 GPIO_ACTIVE_HIGH>;
++		regulator-name = "vcc_hp";
++		regulator-always-on;
++		regulator-boot-on;
++	};
++};
++
++&cpu0 {
++	cpu0-supply = <&vdd_cpu>;
++};
++
++&gpu {
++	mali-supply = <&vdd_gpu>;
++	status = "okay";
++};
++
++&emmc {
++	bus-width = <8>;
++	cap-mmc-highspeed;
++	mmc-hs200-1_8v;
++	disable-wp;
++	non-removable;
++	max-frequency = <100000000>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&emmc_clk>, <&emmc_cmd>, <&emmc_pwr>, <&emmc_bus8>;
++	vmmc-supply = <&vcc_io>;
++	vqmmc-supply = <&vcc_flash>;
++	status = "okay";
++};
++
++&gmac {
++	assigned-clocks = <&cru SCLK_MAC>;
++	assigned-clock-parents = <&ext_gmac>;
++	clock_in_out = "input";
++	phy-supply = <&vcc_lan>;
++	phy-mode = "rgmii";
++	pinctrl-names = "default";
++	pinctrl-0 = <&rgmii_pins>, <&phy_rst>, <&phy_pmeb>, <&phy_int>;
++	snps,reset-gpio = <&gpio4 7 GPIO_ACTIVE_LOW>;
++	snps,reset-active-low;
++	snps,reset-delays-us = <0 10000 1000000>;
++	snps,force_thresh_dma_mode;
++	tx_delay = <0x1d>;
++	rx_delay = <0x16>;
++	max-speed = <100>;
++	status = "okay";
++};
++
++&hdmi {
++	ddc-i2c-bus = <&i2c5>;
++	status = "okay";
++};
++
++/*
++ * HDMI is routed to VOPB (big VOP): nothing to do on Armbian, the
++ * rockchip-6.18 patchset (patches.libreelec/rockchip-0018) already
++ * removed the vopl endpoint from the hdmi node in rk3288.dtsi.
++ */
++
++&i2c0 {
++	clock-frequency = <400000>;
++	status = "okay";
++
++	vdd_cpu: syr827@40 {
++		compatible = "silergy,syr827";
++		fcs,suspend-voltage-selector = <1>;
++		reg = <0x40>;
++		regulator-name = "vdd_cpu";
++		regulator-min-microvolt = <850000>;
++		regulator-max-microvolt = <1350000>;
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-enable-ramp-delay = <300>;
++		regulator-ramp-delay = <8000>;
++		vin-supply = <&vcc_sys>;
++		regulator-state-mem {
++			regulator-off-in-suspend;
++		};
++	};
++
++	vdd_gpu: syr828@41 {
++		compatible = "silergy,syr828";
++		fcs,suspend-voltage-selector = <1>;
++		reg = <0x41>;
++		regulator-name = "vdd_gpu";
++		regulator-min-microvolt = <850000>;
++		regulator-max-microvolt = <1350000>;
++		regulator-always-on;
++		regulator-ramp-delay = <6000>;
++		vin-supply = <&vcc_sys>;
++		regulator-state-mem {
++			regulator-off-in-suspend;
++		};
++	};
++
++	hym8563: hym8563@51 {
++		compatible = "haoyu,hym8563";
++		reg = <0x51>;
++		interrupt-parent = <&gpio7>;
++		interrupts = <4 IRQ_TYPE_EDGE_FALLING>;
++		#clock-cells = <0>;
++		clock-frequency = <32768>;
++		clock-output-names = "xin32k";
++		pinctrl-names = "default";
++		pinctrl-0 = <&rtc_int>;
++	};
++
++	act8846: act8846@5a {
++		compatible = "active-semi,act8846";
++		reg = <0x5a>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pmic_vsel>, <&pwr_hold>;
++		system-power-controller;
++
++		vp1-supply = <&vcc_sys>;
++		vp2-supply = <&vcc_sys>;
++		vp3-supply = <&vcc_sys>;
++		vp4-supply = <&vcc_sys>;
++		inl1-supply = <&vcc_sys>;
++		inl2-supply = <&vcc_sys>;
++		inl3-supply = <&vcc_20>;
++
++		regulators {
++			vcc_ddr: REG1 {
++				regulator-name = "vcc_ddr";
++				regulator-min-microvolt = <1200000>;
++				regulator-max-microvolt = <1200000>;
++				regulator-always-on;
++			};
++
++			vcc_io: REG2 {
++				regulator-name = "vcc_io";
++				regulator-min-microvolt = <3300000>;
++				regulator-max-microvolt = <3300000>;
++				regulator-always-on;
++			};
++
++			vdd_log: REG3 {
++				regulator-name = "vdd_log";
++				regulator-min-microvolt = <700000>;
++				regulator-max-microvolt = <1500000>;
++				regulator-always-on;
++			};
++
++			vcc_20: REG4 {
++				regulator-name = "vcc_20";
++				regulator-min-microvolt = <2000000>;
++				regulator-max-microvolt = <2000000>;
++				regulator-always-on;
++			};
++
++			vccio_sd: REG5 {
++				regulator-name = "vccio_sd";
++				regulator-min-microvolt = <1800000>;
++				regulator-max-microvolt = <3300000>;
++				regulator-always-on;
++			};
++
++			vdd10_lcd: REG6 {
++				regulator-name = "vdd10_lcd";
++				regulator-min-microvolt = <1000000>;
++				regulator-max-microvolt = <1000000>;
++				regulator-always-on;
++			};
++
++			vcca_33: REG7 {
++				regulator-name = "vcca_33";
++				regulator-min-microvolt = <3300000>;
++				regulator-max-microvolt = <3300000>;
++				regulator-always-on;
++			};
++
++			vcc_lan: REG8 {
++				regulator-name = "vcc_lan";
++				regulator-min-microvolt = <3300000>;
++				regulator-max-microvolt = <3300000>;
++				regulator-always-on;
++				regulator-boot-on;
++			};
++
++			vcc_pmu: REG9 {
++				regulator-name = "vcc_pmu";
++				regulator-min-microvolt = <3300000>;
++				regulator-max-microvolt = <3300000>;
++				regulator-always-on;
++			};
++
++			vdd_10: REG10 {
++				regulator-name = "vdd_10";
++				regulator-min-microvolt = <1000000>;
++				regulator-max-microvolt = <1000000>;
++				regulator-always-on;
++			};
++
++			vcc_18: REG11 {
++				regulator-name = "vcc_18";
++				regulator-min-microvolt = <1800000>;
++				regulator-max-microvolt = <1800000>;
++				regulator-always-on;
++			};
++
++			vcc18_lcd: REG12 {
++				regulator-name = "vcc18_lcd";
++				regulator-min-microvolt = <1800000>;
++				regulator-max-microvolt = <1800000>;
++				regulator-always-on;
++			};
++		};
++	};
++};
++
++&i2c2 {
++	status = "okay";
++
++	es8323: es8323@10 {
++		compatible = "everest,es8323";
++		reg = <0x10>;
++		clocks = <&cru SCLK_I2S0_OUT>;
++		clock-names = "mclk";
++		pinctrl-names = "default";
++		pinctrl-0 = <&i2s0_mclk>;
++		#sound-dai-cells = <0>;
++	};
++};
++
++&i2c3 {
++	status = "okay";
++};
++
++&i2c4 {
++	status = "okay";
++};
++
++&i2c5 {
++	status = "okay";
++};
++
++&i2s {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2s0_bus>, <&i2s0_mclk>;
++	status = "okay";
++};
++
++&io_domains {
++	status = "okay";
++
++	audio-supply = <&vcca_33>;
++	dvp-supply = <&dovdd_1v8>;
++	flash0-supply = <&vcc_flash>;
++	flash1-supply = <&vcc_lan>;
++	sdcard-supply = <&vccio_sd>;
++	wifi-supply = <&vcc_18>;
++};
++
++&saradc {
++	vref-supply = <&vccadc_ref>;
++	status = "okay";
++};
++
++&sdmmc {
++	bus-width = <4>;
++	cap-mmc-highspeed;
++	cap-sd-highspeed;
++	sd-uhs-sdr12;
++	sd-uhs-sdr25;
++	sd-uhs-sdr50;
++	sd-uhs-sdr104;
++	card-detect-delay = <200>;
++	disable-wp;
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc_clk>, <&sdmmc_cmd>, <&sdmmc_cd>, <&sdmmc_bus4>;
++	vmmc-supply = <&vcc_sd>;
++	vqmmc-supply = <&vccio_sd>;
++	status = "okay";
++};
++
++/* AP6212 WiFi (SDIO) */
++&sdio0 {
++	clock-frequency = <50000000>;
++	clock-freq-min-max = <200000 50000000>;
++	bus-width = <4>;
++	cap-sd-highspeed;
++	cap-sdio-irq;
++	disable-wp;
++	keep-power-in-suspend;
++	mmc-pwrseq = <&sdio_pwrseq>;
++	non-removable;
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdio0_bus4>, <&sdio0_cmd>, <&sdio0_clk>, <&sdio0_int>;
++	sd-uhs-sdr104;
++	status = "okay";
++};
++
++&spdif {
++	status = "okay";
++};
++
++/*
++ * WK2124 SPI-to-4xUART expander (on-board RS232 x1 + RS485 x1 of the
++ * carrier board), handled by the ported "spi-wk2xxx" driver (V2.5,
++ * adapted to kernel >= 6.6, see userpatch/spi-wk2xxx/).
++ *
++ * The driver bit-bangs the chip-select as a GPIO (WK_CSGPIO_FUNCTION),
++ * so the native cs0 pin (GPIO5_B5) is dropped from the SPI controller
++ * pinmux and muxed as a plain GPIO in the wk2xxx_gpios group instead.
++ * GPIO lines match the Firefly SDK device tree:
++ *   power = GPIO3_B6, reset = GPIO0_C2 (gpio0_18; gpio0_10/B2 is taken by
++ *   tsadc otp-out), irq = GPIO0_A7, cs = GPIO5_B5
++ */
++&spi0 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&spi0_clk &spi0_tx &spi0_rx>;
++	/* WK2124 CS# is wired to gpio5_13 (GPIO5_B5), a plain GPIO — NOT the
++	 * Rockchip native SPI0_CSN0 (gpio5_8). We let the spi-wk2xxx driver
++	 * bit-bang this pin as the chip-select via the custom "wk2xxx,cs-gpio"
++	 * property, so the 6.18 SPI core does NOT claim it (the core only
++	 * reads controller-level "cs-gpios" plural). This is exactly how the
++	 * 4.4 Firefly SDK drives this chip and is the proven-working path. */
++
++	spi_wk2xxx: spi-wk2xxx@0 {
++		status = "okay";
++		compatible = "firefly,spi-wk2xxx";
++		reg = <0x00>;
++		spi-max-frequency = <5000000>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&wk2xxx_gpios>;
++		power-gpio = <&gpio3 14 GPIO_ACTIVE_HIGH>;
++		reset-gpio = <&gpio0 18 GPIO_ACTIVE_HIGH>;
++		irq-gpio = <&gpio0 7 IRQ_TYPE_EDGE_FALLING>;
++		/* WK2124 CS# is on gpio5_13; the driver bit-bangs it as the
++		 * chip-select via WK_CSGPIO_FUNCTION. Custom property name
++		 * (wk2xxx,cs-gpio) keeps the 6.18 SPI core from claiming it. */
++		wk2xxx,cs-gpio = <&gpio5 13 0>;
++		/* WK2xxx port(s) wired to an RS485 transceiver. The chip's RTS
++		 * pin drives DE/RE automatically in RS485 mode; remaining ports
++		 * default to RS232. 1-based, matches the WK2xxx port index.
++		 * Adjust to your carrier board wiring (e.g. <2> = port 2). */
++		wk2xxx,rs485-ports = <2>;
++	};
++};
++
++&tsadc {
++	rockchip,hw-tshut-polarity = <0>; /* tshut polarity 0:LOW 1:HIGH */
++	status = "okay";
++};
++
++/* AP6212 Bluetooth (UART0) */
++&uart0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart0_xfer>, <&uart0_cts>, <&uart0_rts>;
++	status = "okay";
++
++	bluetooth {
++		compatible = "brcm,bcm43438-bt";
++		clocks = <&hym8563>;
++		clock-names = "lpo";
++		shutdown-gpios = <&gpio4 29 GPIO_ACTIVE_HIGH>;	/* BT_REG_ON */
++		device-wakeup-gpios = <&gpio4 26 GPIO_ACTIVE_HIGH>;	/* BT_WAKE */
++		host-wakeup-gpios = <&gpio4 31 GPIO_ACTIVE_HIGH>;	/* BT_HOST_WAKE */
++		max-speed = <1500000>;
++	};
++};
++
++&uart1 {
++	status = "okay";
++};
++
++/* UART2 = serial console */
++&uart2 {
++	status = "okay";
++};
++
++&uart3 {
++	status = "okay";
++};
++
++&usbphy {
++	status = "okay";
++};
++
++&usb_host0_ehci {
++	vbus-supply = <&vcc_host_5v>;
++	status = "okay";
++};
++
++&usb_host0_ohci {
++	vbus-supply = <&vcc_host_5v>;
++	status = "okay";
++};
++
++&usb_host1 {
++	vbus-supply = <&vcc_host_5v>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&usbhub_rst>;
++	status = "okay";
++};
++
++&usb_otg {
++	dr_mode = "host";
++	vbus-supply = <&vcc_otg_5v>;
++	status = "okay";
++};
++
++&vopb {
++	status = "okay";
++};
++
++&vopb_mmu {
++	status = "okay";
++};
++
++&vopl {
++	status = "okay";
++};
++
++&vopl_mmu {
++	status = "okay";
++};
++
++&wdt {
++	status = "okay";
++};
++
++&pinctrl {
++	pcfg_output_high: pcfg-output-high {
++		output-high;
++	};
++
++	act8846 {
++		pmic_vsel: pmic-vsel {
++			rockchip,pins = <7 14 RK_FUNC_GPIO &pcfg_output_low>;
++		};
++
++		pwr_hold: pwr-hold {
++			rockchip,pins = <0 6 RK_FUNC_GPIO &pcfg_output_high>;
++		};
++	};
++
++	vcc-sys {
++		pwr5v_en: pwr5v-en {
++			rockchip,pins = <0 13 RK_FUNC_GPIO &pcfg_output_high>;
++		};
++	};
++
++	dvp {
++		dvp_pwr: dvp-pwr {
++			rockchip,pins = <0 11 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	gmac {
++		phy_int: phy-int {
++			rockchip,pins = <0 9 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++
++		phy_pmeb: phy-pmeb {
++			rockchip,pins = <0 8 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++
++		phy_rst: phy-rst {
++			rockchip,pins = <4 7 RK_FUNC_GPIO &pcfg_output_high>;
++		};
++	};
++
++	hym8563 {
++		rtc_int: rtc-int {
++			rockchip,pins = <7 4 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++
++	buttons {
++		pwrbtn: pwrbtn {
++			rockchip,pins = <0 5 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++
++		keyabtn: keyabtn {
++			rockchip,pins = <7 9 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++
++	ir {
++		ir_int: ir-int {
++			rockchip,pins = <7 0 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++
++	leds {
++		led_power: led-power {
++			rockchip,pins = <8 6 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		led_user: led-user {
++			rockchip,pins = <8 1 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	sdio-pwrseq {
++		wifi_enable_h: wifi-enable-h {
++			rockchip,pins = <4 28 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	sdmmc {
++		sdmmc_pwr: sdmmc-pwr {
++			rockchip,pins = <7 11 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	usb_host {
++		host_vbus_drv: host-vbus-drv {
++			rockchip,pins = <0 14 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++
++		usbhub_rst: usbhub-rst {
++			rockchip,pins = <8 3 RK_FUNC_GPIO &pcfg_output_high>;
++		};
++	};
++
++	usb_otg {
++		otg_vbus_drv: otg-vbus-drv {
++			rockchip,pins = <0 12 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++
++	wk2xxx {
++		/* CS (GPIO5_B5 = gpio5_13) stays muxed as a plain GPIO because it
++		 * is used as the SPI controller-level cs-gpios (see &spi0);
++		 * power/reset/irq remain plain GPIOs. */
++		wk2xxx_gpios: wk2xxx-gpios {
++			rockchip,pins =
++				<5 RK_PB5 RK_FUNC_GPIO &pcfg_pull_up>,
++				<3 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>,
++				<0 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none>,
++				<0 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++	};
++
++	i2s0 {
++		/* I2S0_MCLK = GPIO7_C7 func 1, not present in mainline dtsi */
++		i2s0_mclk: i2s0-mclk {
++			rockchip,pins = <7 15 1 &pcfg_pull_none>;
++		};
++	};
++};

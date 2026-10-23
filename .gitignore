@@ -1,0 +1,6 @@
+.DS_Store
+._*
+*.bak*
+output/
+.cache/
+userpatches.real/

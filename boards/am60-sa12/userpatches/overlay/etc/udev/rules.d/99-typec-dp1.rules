@@ -1,0 +1,13 @@
+# Type-C partner / port add → force DP-1 on so mutter picks up the
+# 4K@30 mode provided by drm.edid_firmware=DP-1:edid/am60-ifp.bin
+#
+# 2026-09-15 修正：原来只有 add 一条规则，【拔线时脚本完全不会被调用】，
+# 导致 HDMA-B-1/DP-1 的 force-on 状态永远残留：物理上 Type-C 什么都没插，
+# 内核仍报 connected + "AM60-IFP 3840x2160"（EDID 覆盖灌进去的），
+# mutter 把它拼成第二块 4K 屏（桌面 7680 宽），红外触控矩阵被压成 0.5 -> 点击错位。
+#
+# 现在 add / remove 都要跑脚本：
+#   add    -> 有 partner 就 on，无 partner 就 off
+#   remove -> 无 partner 立即 off，清掉幽灵屏
+ACTION=="add", SUBSYSTEM=="typec", RUN+="/usr/local/sbin/typec-dp1-forceon.sh add &"
+ACTION=="remove", SUBSYSTEM=="typec", RUN+="/usr/local/sbin/typec-dp1-forceon.sh remove &"

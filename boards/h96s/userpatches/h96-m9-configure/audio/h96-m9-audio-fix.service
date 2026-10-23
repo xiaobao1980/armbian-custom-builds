@@ -1,0 +1,19 @@
+[Unit]
+Description=H96 MAX M9 audio SAI1 routing fix (3.5mm / HT5010) + power-off pop mitigation
+# Apply only after the sound stack is up so the ht5010 card is registered.
+After=sound.target
+Wants=sound.target
+# Run our ExecStop early in the shutdown sequence, while the sound card is
+# still registered, so SDO2 can be disabled before power is cut (pop fix).
+Before=shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/h96-m9-audio-fix.sh start
+# Run before the sound stack is torn down / power is cut, to silence SDO2.
+ExecStop=/usr/local/bin/h96-m9-audio-fix.sh stop
+
+[Install]
+WantedBy=multi-user.target
