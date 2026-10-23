@@ -76,27 +76,32 @@ function post_install_kernel_debs__rkmpp_mpv() {
 			set -e
 
 			# ---- MPP (Media Process Platform) ----
-			cd /tmp
-			rm -rf rkmpp
-			git clone -b jellyfin-mpp --depth=1 https://github.com/nyanmisaka/mpp.git rkmpp
-			cd rkmpp && mkdir build && cd build
-			cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DBUILD_TEST=OFF ..
-			make -j"$(nproc)" && make install && ldconfig
+			# 注意: jellyfin-mpp 仓库自带顶层 build/ 目录, 不能用 "mkdir build" + "cmake ..";
+			# 改用 cmake -S/-B 显式指定源/构建目录, 并避开 "cd x && mkdir y" 链
+			# (bash set -e 对 && 链中间命令失败不退出, 曾导致 cmake 误以 /tmp 为源目录).
+			rm -rf /tmp/rkmpp /tmp/mpp-build
+			git clone -b jellyfin-mpp --depth=1 https://github.com/nyanmisaka/mpp.git /tmp/rkmpp
+			cmake -S /tmp/rkmpp -B /tmp/mpp-build \
+			    -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DBUILD_TEST=OFF
+			cmake --build /tmp/mpp-build -j"$(nproc)"
+			cmake --install /tmp/mpp-build
+			ldconfig
 
 			# ---- RGA (2D 加速器) ----
-			cd /tmp
-			rm -rf rkrga
-			git clone -b jellyfin-rga --depth=1 https://github.com/nyanmisaka/rk-mirrors.git rkrga
-			cd rkrga
-			meson setup build --prefix=/usr/local --buildtype=release \
+			rm -rf /tmp/rkrga /tmp/rga-build
+			git clone -b jellyfin-rga --depth=1 https://github.com/nyanmisaka/rk-mirrors.git /tmp/rkrga
+			meson setup /tmp/rga-build /tmp/rkrga \
+			    --prefix=/usr/local --buildtype=release \
 			    --default-library=shared -Dlibdrm=false -Dlibrga_demo=false
-			ninja -C build && ninja -C build install && ldconfig
+			ninja -C /tmp/rga-build
+			ninja -C /tmp/rga-build install
+			ldconfig
 
 			# ---- ffmpeg-rockchip（库隔离到 /usr/local/lib/ffmpeg-rkmpp）----
-			cd /tmp
-			rm -rf ffmpeg-rockchip
-			git clone --depth=1 https://github.com/nyanmisaka/ffmpeg-rockchip.git ffmpeg-rockchip
-			cd ffmpeg-rockchip
+			# ffmpeg 只支持 in-source 构建; 逐条独立命令, 让 set -e 精确捕获失败
+			rm -rf /tmp/ffmpeg-rockchip
+			git clone --depth=1 https://github.com/nyanmisaka/ffmpeg-rockchip.git /tmp/ffmpeg-rockchip
+			cd /tmp/ffmpeg-rockchip
 			./configure \
 			    --prefix=/usr/local \
 			    --libdir=/usr/local/lib/ffmpeg-rkmpp \
@@ -105,7 +110,9 @@ function post_install_kernel_debs__rkmpp_mpv() {
 			    --enable-shared --disable-static \
 			    --extra-ldflags="-Wl,-rpath,/usr/local/lib/ffmpeg-rkmpp" \
 			    --enable-nonfree
-			make -j"$(nproc)" && make install && ldconfig
+			make -j"$(nproc)"
+			make install
+			ldconfig
 
 			# ---- ffmpeg 优先指向 rkmpp 版 ----
 			for cmd in ffmpeg ffprobe ffplay; do
@@ -137,7 +144,7 @@ function post_install_kernel_debs__rkmpp_mpv() {
 			chmod +x /usr/local/bin/mpv-rkmpp
 
 			# 清理源码树（减小镜像体积）
-			rm -rf /tmp/rkmpp /tmp/rkrga /tmp/ffmpeg-rockchip
+			rm -rf /tmp/rkmpp /tmp/rkrga /tmp/ffmpeg-rockchip /tmp/mpp-build /tmp/rga-build
 			ldconfig
 			echo "=== rkmpp-mpv 安装完成 ==="
 		INSTALLER
