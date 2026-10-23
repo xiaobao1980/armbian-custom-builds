@@ -20,8 +20,11 @@
 #   双路径自动选择（检测 mesa-vpu 是否已启用 amazingfated PPA）:
 #   * noble + desktop + mesa-vpu（PPA liujianfeng1994/rockchip-multimedia 已 pin）:
 #     PPA 的 ffmpeg 6.1.1 构建参数带 --enable-rkmpp --enable-rkrga
-#     （changelog: "Add mpp patch from nyanmisaka"），mpv 0.36.0-1+j1 链接该
-#     libavcodec60 —— apt 装的 mpv 原生支持 rkmpp，直接用 PPA 栈，跳过自编译
+#     （changelog: "Add mpp patch from nyanmisaka"）。注意 PPA 自己的 mpv
+#     重打包(0.36.0-1+j1)现仅剩 jammy/armhf, noble 已下架 —— noble 上 apt
+#     装 Ubuntu 官方 mpv(0.37), 但其动态链接 PPA 的 rkmpp 版 libavcodec60,
+#     h264_rkmpp 等 wrapper 解码器被 mpv 动态注册为 hwdec 方法
+#     (mpv vd_lavc 从 libavcodec 枚举 wrapper_name), 硬解可用, 跳过自编译
 #   * 其他场景（bookworm / server / 未启用 mesa-vpu）:
 #     chroot 内源码编译 MPP / RGA / ffmpeg-rockchip
 #     （库隔离在 /usr/local/lib/ffmpeg-rkmpp, 不污染系统 ffmpeg）+ mpv wrapper
@@ -58,9 +61,10 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	fi
 
 	# ---- 0. 检测 mesa-vpu 的 amazingfated PPA 栈（noble + desktop）----
-	# PPA ffmpeg 6.1.1 带 --enable-rkmpp --enable-rkrga, mpv 0.36.0-1+j1 链接
-	# 该 libavcodec60 —— apt 装的 mpv 原生支持 rkmpp, 无需自编译。
-	# 判据: mesa-vpu 扩展写入的 apt pin 文件（extension 顺序 mesa-vpu 在前）
+	# PPA ffmpeg 6.1.1 带 --enable-rkmpp --enable-rkrga; PPA 的 mpv 重打包
+	# (0.36.0-1+j1) 仅剩 jammy/armhf, noble 上 apt 装官方 mpv 0.37 —— 但它
+	# 动态链接 PPA 的 rkmpp 版 libavcodec60, wrapper 解码器对 mpv 可见,
+	# 硬解可用。判据: mesa-vpu 扩展写入的 apt pin 文件（顺序 mesa-vpu 在前）
 	RKMPP_USE_PPA_STACK="no"
 	if [[ -f "${SDCARD}/etc/apt/preferences.d/amazingfated-rk3588-rockchip-multimedia-pin" ]]; then
 		RKMPP_USE_PPA_STACK="yes"
@@ -188,9 +192,13 @@ function post_install_kernel_debs__rkmpp_mpv() {
 		# RKMPP 硬件加速 — X11 (非 Wayland) 全局配置
 		# 适用: XFCE / GNOME (X11) / Deepin + Panfrost (Mali GPU)
 
-		# ========== 硬件解码 ==========
-		hwdec=auto
-		hwdec-codecs=all
+	# ========== 硬件解码 ==========
+	# 显式锁定 rkmpp: mpv 会从 libavcodec 动态枚举 wrapper 解码器
+	# (h264_rkmpp 等, wrapper_name=rkmpp) 注册为 hwdec 方法; 但 hwdec=auto
+	# 的探测白名单不含 rkmpp(排在最后且随机序), 显式指定才确定命中。
+	# rkmpp 初始化失败或该编码无 *_rkmpp 解码器时 mpv 自动回退软解。
+	hwdec=rkmpp
+	hwdec-codecs=all
 
 		# ========== 视频输出 ==========
 		vo=gpu

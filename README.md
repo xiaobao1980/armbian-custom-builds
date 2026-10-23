@@ -79,7 +79,7 @@ Actions 页面两个入口：
 
 **路径一：noble + desktop + mesa-vpu（PPA 栈，零编译）**
 
-mesa-vpu 已启用的 amazingfated PPA（`liujianfeng1994/rockchip-multimedia`）里，ffmpeg 6.1.1 构建参数即带 `--enable-rkmpp --enable-rkrga`（changelog: "Add mpp patch from nyanmisaka"），mpv `0.36.0-1+j1` 链接该 libavcodec60 —— **apt 装的 mpv 原生支持 rkmpp 硬解**。检测到该 PPA pin 时直接装 `mpv`/`ffmpeg`（PPA 版），跳过自编译（构建快 4 分钟、镜像小 ~57MB）。
+mesa-vpu 已启用的 amazingfated PPA（`liujianfeng1994/rockchip-multimedia`）里，ffmpeg 6.1.1 构建参数即带 `--enable-rkmpp --enable-rkrga`（changelog: "Add mpp patch from nyanmisaka"）。PPA 自己的 mpv 重打包（`0.36.0-1+j1`）现仅剩 jammy/armhf、noble 已下架，noble 上 apt 装 Ubuntu 官方 mpv 0.37 —— 但其动态链接 PPA 的 rkmpp 版 `libavcodec60`，`h264_rkmpp`/`hevc_rkmpp` 等 wrapper 解码器会被 mpv 动态注册为 hwdec 方法（mpv 从 libavcodec 枚举 `wrapper_name`），硬解可用。检测到该 PPA pin 时直接装 `mpv`/`ffmpeg`，跳过自编译（构建快 4 分钟、镜像小 ~57MB）。
 
 **路径二：bookworm / server / 未启用 mesa-vpu（自编译栈）**
 
@@ -90,16 +90,16 @@ mesa-vpu 已启用的 amazingfated PPA（`liujianfeng1994/rockchip-multimedia`�
 
 **两条路径共同落盘**：
 
-3. **全局 `/etc/mpv/mpv.conf`**：`hwdec=auto` + `vo=gpu` + `gpu-api=opengl`（X11 渲染基线，Panfrost 无 Vulkan）+ 4K 性能优化（`profile=fast`）；
+3. **全局 `/etc/mpv/mpv.conf`**：`hwdec=rkmpp`（显式锁定——`hwdec=auto` 的探测白名单不含 rkmpp，会把它排在最后且随机序；rkmpp 初始化失败时 mpv 自动回退软解）+ `vo=gpu` + `gpu-api=opengl`（X11 渲染基线，Panfrost 无 Vulkan）+ 4K 性能优化（`profile=fast`）；
 4. **全局非 Wayland**：GNOME/gdm3 写 `WaylandEnable=false`，KDE/sddm 写 `DisplayServer=x11`，另加 modesetting `TearFree` 防撕裂。
 
 板上验证：
 
 ```bash
-# PPA 路径: libavcodec 应为 PPA 版 (6.1.1+...~noble); 自编译路径: 应指向 /usr/local/lib/ffmpeg-rkmpp/
+# PPA 路径: libavcodec 应为 PPA 版 (6.1.1-3ubuntu5+git240504...~noble); 自编译路径: 应指向 /usr/local/lib/ffmpeg-rkmpp/
 ldd $(which mpv) | grep libavcodec
-ffmpeg -hwaccel rkmpp -i video.mp4 -f null -   # CPU 应 < 20%
-mpv --msg-level=vd=debug video.mp4 2>&1 | grep -iE "hwdec|rkmpp"
+ffmpeg -decoders 2>/dev/null | grep rkmpp        # 应列出 h264_rkmpp/hevc_rkmpp 等
+mpv --msg-level=vd=debug video.mp4 2>&1 | grep -iE "hwdec|rkmpp"   # 应显示 hwdec: rkmpp 生效
 echo $XDG_SESSION_TYPE                  # 应为 x11
 ```
 
