@@ -34,9 +34,9 @@ on:
           - "yes"
           - "no"
       build_ref:
-        description: "armbian/build 引用 (分支/标签)"
+        description: "armbian/build 引用 (分支/标签, 主线是 main; master 是旧分支)"
         required: false
-        default: "master"
+        default: "main"
         type: string
 
 jobs:
