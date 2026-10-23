@@ -82,20 +82,31 @@ jobs:
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
           echo "构建参数: ${ARGS}"
 
+      - name: 安装构建依赖 (compile.sh requirements)
+        run: |
+          cd armbian-build
+          sudo ./compile.sh requirements
+          # requirements 会以 root 生成缓存目录, 交还给当前用户避免后续非 root 构建失败
+          sudo chown -R "${USER}:${USER}" .
+
       - name: 编译镜像
         run: |
           cd armbian-build
-          sudo ./compile.sh build \
+          # 与官方 armbian/build action 一致: 非 root 运行, 内部自行 sudo
+          # EXPERT=yes 跳过社区板(.csc)的交互确认, 否则 CI 无 TTY 会卡住
+          ./compile.sh build \
             ${{ steps.args.outputs.args }} \
             KERNEL_CONFIGURE=no \
-            COMPRESS_OUTPUTIMAGE=sha,img
+            EXPERT=yes \
+            SHARE_LOG=yes \
+            COMPRESS_OUTPUTIMAGE=sha,img,xz
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4
         with:
           name: armbian-${{ inputs.board }}-${{ github.run_number }}
           path: |
-            armbian-build/output/images/**/*.img.xz
+            armbian-build/output/images/**/*.img*.xz
             armbian-build/output/images/**/*.sha
           if-no-files-found: error
           retention-days: 14

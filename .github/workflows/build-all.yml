@@ -68,20 +68,36 @@ jobs:
           source "boards/${{ matrix.board }}/build.env"
           echo "args=BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}" >> "$GITHUB_OUTPUT"
 
+      - name: 安装构建依赖 (compile.sh requirements)
+        run: |
+          cd armbian-build
+          sudo ./compile.sh requirements
+          sudo chown -R "${USER}:${USER}" .
+
       - name: 编译镜像
         run: |
           cd armbian-build
-          sudo ./compile.sh build \
+          ./compile.sh build \
             ${{ steps.args.outputs.args }} \
             KERNEL_CONFIGURE=no \
-            COMPRESS_OUTPUTIMAGE=sha,img
+            EXPERT=yes \
+            SHARE_LOG=yes \
+            COMPRESS_OUTPUTIMAGE=sha,img,xz
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4
         with:
           name: armbian-${{ matrix.board }}-${{ github.run_number }}
           path: |
-            armbian-build/output/images/**/*.img.xz
+            armbian-build/output/images/**/*.img*.xz
             armbian-build/output/images/**/*.sha
           if-no-files-found: error
+          retention-days: 14
+
+      - name: 上传构建日志 (失败时)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.board }}-${{ github.run_number }}
+          path: armbian-build/output/logs/**
           retention-days: 14
