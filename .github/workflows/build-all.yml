@@ -53,6 +53,23 @@ jobs:
           docker-images: true
           swap-storage: false
 
+      - name: 注册 QEMU binfmt (跨架构 arm64 构建必需)
+        run: |
+          set -euo pipefail
+          if [ "$(uname -m)" = "aarch64" ]; then
+            echo "原生 arm64 runner, 无需 qemu binfmt"; exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static binfmt-support
+          sudo systemctl restart systemd-binfmt 2>/dev/null || true
+          sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
+          sudo update-binfmts --enable qemu-arm 2>/dev/null || true
+          if ! ls /proc/sys/fs/binfmt_misc/ | grep -qi 'aarch64'; then
+            echo "apt 注册失败, 改用 tonistiigi/binfmt 兜底"
+            docker run --privileged --rm tonistiigi/binfmt --install arm64,arm
+          fi
+          echo "--- binfmt_misc 已注册:"; ls /proc/sys/fs/binfmt_misc/
+
       - name: Clone armbian/build (${{ inputs.build_ref }})
         run: |
           git clone --depth=1 --branch "${{ inputs.build_ref }}" \

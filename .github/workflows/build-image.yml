@@ -100,9 +100,18 @@ on:
         required: false
         default: "main"
 
+      runner:
+        description: "运行器 (arm64 板选 ubuntu-24.04-arm 可原生编译, 免 qemu 且更快; x86 runner 会装 qemu binfmt)"
+        type: choice
+        required: false
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
     steps:
       - name: Checkout
@@ -118,6 +127,31 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: false
+
+      - name: 注册 QEMU binfmt (跨架构 arm64 构建必需)
+        run: |
+          set -euo pipefail
+          # x86 runner 上构建 arm64 镜像, armbian 会在 rootfs 阶段 chroot 进 arm64,
+          # 需要 binfmt_misc + qemu-aarch64-static; 否则挂在这里:
+          #   [error] Failed to update binfmts update-binfmts --enable qemu-aarch64
+          #   [error] arch-test: arm64: not supported on this machine/kernel
+          if [ "$(uname -m)" = "aarch64" ]; then
+            echo "原生 arm64 runner, 无需 qemu binfmt"
+            exit 0
+          fi
+          sudo apt-get update -qq
+          # qemu-user-static 自带带 F(fix-binary) 标志的注册项, 容器内也能用
+          sudo apt-get install -y -qq qemu-user-static binfmt-support
+          sudo systemctl restart systemd-binfmt 2>/dev/null || true
+          sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
+          sudo update-binfmts --enable qemu-arm 2>/dev/null || true
+          if ! ls /proc/sys/fs/binfmt_misc/ | grep -qi 'aarch64'; then
+            echo "apt 注册失败, 改用 tonistiigi/binfmt 兜底"
+            docker run --privileged --rm tonistiigi/binfmt --install arm64,arm
+          fi
+          echo "--- binfmt_misc 已注册:"
+          ls /proc/sys/fs/binfmt_misc/
+          grep -h '^enabled\|^disabled' /proc/sys/fs/binfmt_misc/qemu-aarch64 || true
 
       - name: Clone armbian/build (${{ inputs.build_ref }})
         run: |
