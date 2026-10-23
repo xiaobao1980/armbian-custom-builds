@@ -82,29 +82,19 @@ jobs:
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
           echo "构建参数: ${ARGS}"
 
-      - name: 安装构建依赖 (compile.sh requirements)
-        run: |
-          cd armbian-build
-          # 必须把 BOARD/BRANCH/RELEASE/BUILD_DESKTOP 一起传入:
-          # armbian 的交互式询问函数都是"变量已设置就 return 0", 不传会弹 dialog,
-          # CI 无 TTY → "cannot open tty-output" → "No option selected" 退 255。
-          sudo ./compile.sh requirements \
-            ${{ steps.args.outputs.args }} \
-            KERNEL_CONFIGURE=no \
-            EXPERT=yes
-          # requirements 会以 root 生成缓存目录, 交还给当前用户避免后续非 root 构建失败
-          sudo chown -R "${USER}:${USER}" .
-
       - name: 编译镜像
         run: |
           cd armbian-build
-          # 与官方 armbian/build action 一致: 非 root 运行, 内部自行 sudo
-          # EXPERT=yes 跳过社区板(.csc)的交互确认, 否则 CI 无 TTY 会卡住
+          # 不单独跑 `compile.sh requirements`: 该 target 在本版本会落入
+          # "选择构建目标"的交互分支, CI 无 TTY 直接退 255。
+          # build 阶段自己会做完整 host 准备(内部 sudo), 官方 action.yml 也是这么调的。
+          # EXPERT=yes 跳过社区板(.csc)的交互确认。
           ./compile.sh build \
             ${{ steps.args.outputs.args }} \
             KERNEL_CONFIGURE=no \
             EXPERT=yes \
             SHARE_LOG=yes \
+            DOWNLOAD_MIRROR=china \
             COMPRESS_OUTPUTIMAGE=sha,img,xz
 
       - name: 上传镜像产物

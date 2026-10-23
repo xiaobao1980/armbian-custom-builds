@@ -68,15 +68,6 @@ jobs:
           source "boards/${{ matrix.board }}/build.env"
           echo "args=BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}" >> "$GITHUB_OUTPUT"
 
-      - name: 安装构建依赖 (compile.sh requirements)
-        run: |
-          cd armbian-build
-          sudo ./compile.sh requirements \
-            ${{ steps.args.outputs.args }} \
-            KERNEL_CONFIGURE=no \
-            EXPERT=yes
-          sudo chown -R "${USER}:${USER}" .
-
       - name: 编译镜像
         run: |
           cd armbian-build
@@ -85,6 +76,7 @@ jobs:
             KERNEL_CONFIGURE=no \
             EXPERT=yes \
             SHARE_LOG=yes \
+            DOWNLOAD_MIRROR=china \
             COMPRESS_OUTPUTIMAGE=sha,img,xz
 
       - name: 上传镜像产物
