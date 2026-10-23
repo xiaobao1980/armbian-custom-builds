@@ -17,11 +17,17 @@
 #   RKMPP_MPV_SKIP_BUILD=yes  跳过源码编译（仅装 mpv + 写配置, 用于快速验证）
 #
 # 做了什么:
-#   1. 安装 mpv + 编译依赖, 在 chroot 内源码编译 MPP / RGA / ffmpeg-rockchip
-#      （库隔离在 /usr/local/lib/ffmpeg-rkmpp, 不污染系统 ffmpeg）
-#   2. mpv wrapper: /usr/bin/mpv 经 LD_LIBRARY_PATH 加载 rkmpp 版 libavcodec
-#   3. 全局 /etc/mpv/mpv.conf: vo=gpu + gpu-api=opengl（X11 渲染, Panfrost 无 Vulkan）
-#   4. 全局非 Wayland: gdm3 WaylandEnable=false / sddm DisplayServer=x11,
+#   双路径自动选择（检测 mesa-vpu 是否已启用 amazingfated PPA）:
+#   * noble + desktop + mesa-vpu（PPA liujianfeng1994/rockchip-multimedia 已 pin）:
+#     PPA 的 ffmpeg 6.1.1 构建参数带 --enable-rkmpp --enable-rkrga
+#     （changelog: "Add mpp patch from nyanmisaka"），mpv 0.36.0-1+j1 链接该
+#     libavcodec60 —— apt 装的 mpv 原生支持 rkmpp，直接用 PPA 栈，跳过自编译
+#   * 其他场景（bookworm / server / 未启用 mesa-vpu）:
+#     chroot 内源码编译 MPP / RGA / ffmpeg-rockchip
+#     （库隔离在 /usr/local/lib/ffmpeg-rkmpp, 不污染系统 ffmpeg）+ mpv wrapper
+#   两条路径共同落盘:
+#   1. 全局 /etc/mpv/mpv.conf: hwdec=auto + vo=gpu + gpu-api=opengl（X11 渲染）
+#   2. 全局非 Wayland: gdm3 WaylandEnable=false / sddm DisplayServer=x11,
 #      桌面会话强制跑在 X11 上
 #
 
@@ -51,20 +57,37 @@ function post_install_kernel_debs__rkmpp_mpv() {
 		return 0
 	fi
 
-	# ---- 1. mpv + 编译依赖 ----
-	display_alert "Installing mpv and build dependencies" "${EXTENSION}" "info"
-	declare -a pkgs=(
-		"mpv" "ffmpeg"
-		"git" "cmake" "meson" "ninja-build" "pkg-config"
-		"build-essential" "yasm" "nasm"
-		"libdrm-dev" "libx11-dev" "libxext-dev"
-		"libfdk-aac-dev" "libmp3lame-dev" "libopus-dev"
-		"libx264-dev" "libx265-dev" "libass-dev"
-	)
-	do_with_retries 3 chroot_sdcard_apt_get_install "${pkgs[@]}"
+	# ---- 0. 检测 mesa-vpu 的 amazingfated PPA 栈（noble + desktop）----
+	# PPA ffmpeg 6.1.1 带 --enable-rkmpp --enable-rkrga, mpv 0.36.0-1+j1 链接
+	# 该 libavcodec60 —— apt 装的 mpv 原生支持 rkmpp, 无需自编译。
+	# 判据: mesa-vpu 扩展写入的 apt pin 文件（extension 顺序 mesa-vpu 在前）
+	RKMPP_USE_PPA_STACK="no"
+	if [[ -f "${SDCARD}/etc/apt/preferences.d/amazingfated-rk3588-rockchip-multimedia-pin" ]]; then
+		RKMPP_USE_PPA_STACK="yes"
+		display_alert "mesa-vpu PPA rkmpp stack detected, using PPA mpv/ffmpeg (no source build)" "${EXTENSION}" "info"
+	fi
+
+	# ---- 1. mpv (+ 编译依赖, 仅自编译路径需要) ----
+	if [[ "${RKMPP_USE_PPA_STACK}" == "yes" ]]; then
+		display_alert "Installing mpv/ffmpeg from rkmpp-enabled PPA" "${EXTENSION}" "info"
+		do_with_retries 3 chroot_sdcard_apt_get_install "mpv" "ffmpeg"
+	else
+		display_alert "Installing mpv and build dependencies" "${EXTENSION}" "info"
+		declare -a pkgs=(
+			"mpv" "ffmpeg"
+			"git" "cmake" "meson" "ninja-build" "pkg-config"
+			"build-essential" "yasm" "nasm"
+			"libdrm-dev" "libx11-dev" "libxext-dev"
+			"libfdk-aac-dev" "libmp3lame-dev" "libopus-dev"
+			"libx264-dev" "libx265-dev" "libass-dev"
+		)
+		do_with_retries 3 chroot_sdcard_apt_get_install "${pkgs[@]}"
+	fi
 
 	# ---- 2. 源码编译 MPP / RGA / ffmpeg-rockchip（chroot 内 root, 无需 sudo）----
-	if [[ "${RKMPP_MPV_SKIP_BUILD:-no}" == "yes" ]]; then
+	if [[ "${RKMPP_USE_PPA_STACK}" == "yes" ]]; then
+		display_alert "Skipping rkmpp source build (PPA stack in place)" "${EXTENSION}" "info"
+	elif [[ "${RKMPP_MPV_SKIP_BUILD:-no}" == "yes" ]]; then
 		display_alert "Skipping rkmpp source build" "RKMPP_MPV_SKIP_BUILD=yes" "warn"
 	else
 		display_alert "Staging install script" "${EXTENSION}" "info"

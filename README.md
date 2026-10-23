@@ -75,17 +75,29 @@ Actions 页面两个入口：
 
 ## 公共扩展：rkmpp-mpv（RKMPP 硬解 + 全局非 Wayland）
 
-所有 **vendor 内核**的 RK3566/RK3568/RK3576/RK3588 板卡默认启用（`ENABLE_EXTENSIONS=rkmpp-mpv`，h96-m9/h96s 与 mesa-vpu 逗号连用）。完整原理见 `docs/Debian_X11_RKMPP_MPV_Guide.md`，镜像内做了四件事：
+所有 **vendor 内核**的 RK3566/RK3568/RK3576/RK3588 板卡默认启用（`ENABLE_EXTENSIONS=rkmpp-mpv`，h96-m9/h96s 与 mesa-vpu 逗号连用）。完整原理见 `docs/Debian_X11_RKMPP_MPV_Guide.md`。扩展按场景**自动选路**：
 
-1. **RKMPP 编解码栈**：chroot 内源码编译 MPP（jellyfin-mpp）+ RGA（jellyfin-rga）+ ffmpeg-rockchip，库隔离在 `/usr/local/lib/ffmpeg-rkmpp`，不污染系统 ffmpeg；
-2. **mpv wrapper**：`/usr/bin/mpv` 经 `LD_LIBRARY_PATH` 加载 rkmpp 版 libavcodec（`h264_rkmpp`/`hevc_rkmpp`/`av1_rkmpp` 硬解），另有显式命令 `mpv-rkmpp`；
+**路径一：noble + desktop + mesa-vpu（PPA 栈，零编译）**
+
+mesa-vpu 已启用的 amazingfated PPA（`liujianfeng1994/rockchip-multimedia`）里，ffmpeg 6.1.1 构建参数即带 `--enable-rkmpp --enable-rkrga`（changelog: "Add mpp patch from nyanmisaka"），mpv `0.36.0-1+j1` 链接该 libavcodec60 —— **apt 装的 mpv 原生支持 rkmpp 硬解**。检测到该 PPA pin 时直接装 `mpv`/`ffmpeg`（PPA 版），跳过自编译（构建快 4 分钟、镜像小 ~57MB）。
+
+**路径二：bookworm / server / 未启用 mesa-vpu（自编译栈）**
+
+按指南方案 A 在 chroot 内源码编译：
+
+1. **RKMPP 编解码栈**：MPP（jellyfin-mpp）+ RGA（jellyfin-rga）+ ffmpeg-rockchip，库隔离在 `/usr/local/lib/ffmpeg-rkmpp`，不污染系统 ffmpeg；
+2. **mpv wrapper**：`/usr/bin/mpv` 经 `LD_LIBRARY_PATH` 加载 rkmpp 版 libavcodec（`h264_rkmpp`/`hevc_rkmpp`/`av1_rkmpp` 硬解），另有显式命令 `mpv-rkmpp`。
+
+**两条路径共同落盘**：
+
 3. **全局 `/etc/mpv/mpv.conf`**：`hwdec=auto` + `vo=gpu` + `gpu-api=opengl`（X11 渲染基线，Panfrost 无 Vulkan）+ 4K 性能优化（`profile=fast`）；
 4. **全局非 Wayland**：GNOME/gdm3 写 `WaylandEnable=false`，KDE/sddm 写 `DisplayServer=x11`，另加 modesetting `TearFree` 防撕裂。
 
 板上验证：
 
 ```bash
-ldd $(which mpv) | grep libavcodec     # 应指向 /usr/local/lib/ffmpeg-rkmpp/
+# PPA 路径: libavcodec 应为 PPA 版 (6.1.1+...~noble); 自编译路径: 应指向 /usr/local/lib/ffmpeg-rkmpp/
+ldd $(which mpv) | grep libavcodec
 ffmpeg -hwaccel rkmpp -i video.mp4 -f null -   # CPU 应 < 20%
 mpv --msg-level=vd=debug video.mp4 2>&1 | grep -iE "hwdec|rkmpp"
 echo $XDG_SESSION_TYPE                  # 应为 x11
@@ -93,8 +105,8 @@ echo $XDG_SESSION_TYPE                  # 应为 x11
 
 说明：
 - 非条件板卡（edge/current 内核、minimal、非 rk35xx/rk3588 家族）自动跳过，零副作用；
-- server 镜像（如 am60-sa12）同样编译 RKMPP 栈（供 kiosk/无人值守播放直接 `mpv` 硬解），仅跳过显示管理器配置；
-- 源码编译约 +20–40 分钟（arm64 原生 runner），**建议 x86 runner 时选 `runner=ubuntu-24.04-arm`**，qemu 模拟下编译会慢数倍；
+- server 镜像（如 am60-sa12，无 mesa-vpu）走自编译路径（供 kiosk/无人值守播放直接 `mpv` 硬解），仅跳过显示管理器配置；
+- 自编译路径约 +20–40 分钟（arm64 原生 runner），**建议 x86 runner 时选 `runner=ubuntu-24.04-arm`**，qemu 模拟下编译会慢数倍；PPA 路径无编译开销；
 - 调试时可传 `RKMPP_MPV_SKIP_BUILD=yes` 跳过编译，只装 mpv + 写配置（软解基线排查用）。
 
 ## 本地编译
