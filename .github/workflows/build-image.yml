@@ -33,6 +33,16 @@ on:
           - ""
           - "yes"
           - "no"
+      desktop_environment:
+        description: "DESKTOP_ENVIRONMENT 覆盖 (gnome/xfce/... 留空 = 默认；armhf 板只能用 xfce/cinnamon/mate/i3-wm/enlightenment)"
+        required: false
+        default: ""
+        type: string
+      desktop_tier:
+        description: "DESKTOP_TIER 覆盖 (minimal/mid/full, 留空 = 默认)"
+        required: false
+        default: ""
+        type: string
       build_ref:
         description: "armbian/build 引用 (分支/标签, 主线是 main; master 是旧分支)"
         required: false
@@ -81,15 +91,25 @@ jobs:
           ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
           # 扩展: 为空则不传, 避免覆盖板卡 csc 里可能已有的 ENABLE_EXTENSIONS
           if [ -n "${ENABLE_EXTENSIONS:-}" ]; then ARGS="${ARGS} ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS}"; fi
+          # 桌面环境/档位: BUILD_DESKTOP=yes 时必须显式给出, 否则 armbian 会弹
+          # dialog 选桌面(Choose a desktop environment) 和档位(Choose desktop tier),
+          # CI 无 TTY → "stdin is not a terminal. can't use dialog" → 退 43。
+          DE="${DESKTOP_ENVIRONMENT:-}"; TIER="${DESKTOP_TIER:-}"
+          if [ -n "${{ inputs.desktop_environment }}" ]; then DE="${{ inputs.desktop_environment }}"; fi
+          if [ -n "${{ inputs.desktop_tier }}" ]; then TIER="${{ inputs.desktop_tier }}"; fi
+          if [ "${DESKTOP}" = "yes" ]; then
+            if [ -z "${DE}" ]; then echo "::error::BUILD_DESKTOP=yes 但 DESKTOP_ENVIRONMENT 为空"; exit 1; fi
+            ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DE}"
+            if [ -n "${TIER}" ]; then ARGS="${ARGS} DESKTOP_TIER=${TIER}"; fi
+          fi
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
           echo "构建参数: ${ARGS}"
 
       - name: 编译镜像
         run: |
           cd armbian-build
-          # ⚠️ 参数顺序是硬约束: armbian 的 cli-entrypoint.sh:96 只解析「开头连续」的
-          # KEY=VALUE, 目标命令(build)必须放最后; 否则所有参数都不会生效,
-          # armbian 会当成无参调用进入 dialog 交互 → CI 无 TTY → 退 255。
+          # main 分支的 CLI (entrypoint.sh + commands.sh) 参数顺序任意;
+          # 但保持"KEY=VALUE 在前, 目标命令 build 在后"的可读写法。
           # EXPERT=yes 跳过社区板(.csc)的交互确认。
           ./compile.sh \
             ${{ steps.args.outputs.args }} \

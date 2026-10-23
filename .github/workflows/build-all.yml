@@ -68,12 +68,19 @@ jobs:
           source "boards/${{ matrix.board }}/build.env"
           ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
           if [ -n "${ENABLE_EXTENSIONS:-}" ]; then ARGS="${ARGS} ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS}"; fi
+          # BUILD_DESKTOP=yes 必须显式给桌面环境和档位, 否则弹 dialog(无 TTY 直接挂)
+          if [ "${BUILD_DESKTOP}" = "yes" ]; then
+            if [ -z "${DESKTOP_ENVIRONMENT:-}" ]; then echo "::error::BUILD_DESKTOP=yes 但 DESKTOP_ENVIRONMENT 为空"; exit 1; fi
+            ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DESKTOP_ENVIRONMENT}"
+            if [ -n "${DESKTOP_TIER:-}" ]; then ARGS="${ARGS} DESKTOP_TIER=${DESKTOP_TIER}"; fi
+          fi
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          echo "构建参数: ${ARGS}"
 
       - name: 编译镜像
         run: |
           cd armbian-build
-          # 目标命令 build 必须放最后: armbian 只解析开头连续的 KEY=VALUE
+          # main 分支 CLI 参数顺序任意, 保持 KEY=VALUE 在前更可读
           ./compile.sh \
             ${{ steps.args.outputs.args }} \
             KERNEL_CONFIGURE=no \

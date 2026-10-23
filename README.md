@@ -53,6 +53,7 @@ source ../boards/h96s/build.env
 sudo ./compile.sh \
   BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} \
   BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL} \
+  DESKTOP_ENVIRONMENT=${DESKTOP_ENVIRONMENT} DESKTOP_TIER=${DESKTOP_TIER} \
   ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS} \
   KERNEL_CONFIGURE=no EXPERT=yes DOWNLOAD_MIRROR=china \
   COMPRESS_OUTPUTIMAGE=sha,img,xz \
@@ -62,6 +63,8 @@ sudo ./compile.sh \
 
 ## 维护约定
 
+- **`BUILD_DESKTOP=yes` 必须同时给 `DESKTOP_ENVIRONMENT` 和 `DESKTOP_TIER`**：新框架会在缺省时弹 `Choose a desktop environment` / `Choose desktop tier` 对话框，CI 无 TTY 直接以 `stdin is not a terminal. can't use dialog` 退 43。档位 `minimal`（仅 DE，~500MB）/ `mid`（+浏览器、文件管理器、媒体，~1GB）/ `full`（+办公、创作、开发，~2.5GB）。
+- 桌面可用性受**架构**限制：`gnome` / `kde-plasma` / `kde-neon` / `deepin` 只支持 `arm64`/`amd64`；**armhf 板（如 RK3288 的 aio-3288c）只能选 `xfce` / `cinnamon` / `mate` / `i3-wm` / `enlightenment`**。
 - 新板卡 = `boards/<name>/` 建目录（config/boards + userpatches + build.env），并在两个 workflow 的 options/matrix 中登记。
 - 补丁一律放 `userpatches/kernel/<family-branch>/`（新式）或该板 `patch/kernel/archive/<dir>/`（旧式 in-tree，仅 AIO 使用）。
 - 板级开机定制写在各自 .csc 的 `post_family_tweaks__*` hook 中（host 上下文、只对本板生效）；**不要**往 `customize-image.sh` 塞板级逻辑 —— 官方对所有板无条件 source 它，会互相污染（除非自行加 `$BOARD` 守卫）。
