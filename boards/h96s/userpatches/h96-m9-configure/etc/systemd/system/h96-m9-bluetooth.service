@@ -1,5 +1,5 @@
 [Unit]
-Description=H96 MAX M9 (RK3576) RTL8723DS UART Bluetooth (hciattach ttyS4)
+Description=H96 MAX M9 (RK3576) AIC8800D80 UART Bluetooth (hciattach ttyS4)
 Documentation=https://docs.armbian.com/
 # Wait for the UART tty to exist, and bring BT up before bluetoothd tries.
 After=dev-ttyS4.device
@@ -9,6 +9,11 @@ ConditionPathExists=/usr/bin/hciattach
 
 [Service]
 Type=simple
+# AIC8800D80 是 combo 芯片: BT 部分的固件由 WiFi 驱动(aic8800_fdrv, radxa-aic8800
+# DKMS 扩展)加载后才可响应 HCI。板上实证(2026-10-24): 无 WiFi 驱动时 hciattach
+# 发出 reset 后 TX:4 commands / RX:0 events, hci0 DOWN 且 BD_ADDR 全 0。
+# 因此先等 /sys/class/net/wlan0 出现(最多 90s), 超时不阻断(退回旧行为)。
+ExecStartPre=/bin/sh -c 'i=0; while [ $i -lt 90 ]; do [ -e /sys/class/net/wlan0 ] && exit 0; sleep 1; i=$((i+1)); done; exit 0'
 # -n: run in foreground (do NOT daemonize) so systemd supervises the process.
 ExecStart=/usr/bin/hciattach -n -s 1500000 /dev/ttyS4 any 1500000 flow nosleep
 Restart=on-failure
