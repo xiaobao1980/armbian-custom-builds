@@ -10,7 +10,6 @@ on:
         default: h96s
         options:
           - aio-3288c
-          - h96-m9
           - h96s
           - am60-sa12
           - neardi-lz200

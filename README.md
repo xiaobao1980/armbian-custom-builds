@@ -9,7 +9,6 @@
 | 板卡 | SoC | BOARDFAMILY | 默认 BRANCH/RELEASE | 关键定制 |
 |---|---|---|---|---|
 | `aio-3288c` | RK3288 | rockchip | edge / noble | add-board DTS、WK2124 SPI-UART（RS232+RS485）、dwc2 host 修复、wk2xxx extension |
-| `h96-m9` | RK3576 | rk35xx | vendor / noble | 内核 DTS 直放 `kernel/rk35xx-vendor-6.1/`、U-Boot defconfig（u-boot-rockchip64） |
 | `h96s` | RK3576 | rk35xx | vendor / noble | 2026-08-29 golden 基线：9999 DTS 补丁、SAI TDM lanes 修复、`h96-m9-configure`（音频/蓝牙/VPU）经 .csc hook 部署 |
 | `am60-sa12` | RK3588 | rockchip-rk3588 | vendor / bookworm | rk3588-am60-sa12 DTS（kernel+u-boot）、tcpci_et7303.ko、触控/HDMI/RT5616 全套 overlay |
 | `neardi-lz200` | RK3576 | rk35xx | vendor / bookworm | 自定义 defconfig/DTS 补丁 + `linux-neardi-lz200-rk3576.config` |
@@ -75,7 +74,7 @@ Actions 页面两个入口：
 
 ## 公共扩展：rkmpp-mpv（RKMPP 硬解 + 全局非 Wayland）
 
-所有 **vendor 内核**的 RK3566/RK3568/RK3576/RK3588 板卡默认启用（`ENABLE_EXTENSIONS=rkmpp-mpv`，h96-m9/h96s 与 mesa-vpu 逗号连用）。完整原理见 `docs/Debian_X11_RKMPP_MPV_Guide.md`。扩展按场景**自动选路**：
+所有 **vendor 内核**的 RK3566/RK3568/RK3576/RK3588 板卡默认启用（`ENABLE_EXTENSIONS=rkmpp-mpv`，h96s 与 mesa-vpu 逗号连用）。完整原理见 `docs/Debian_X11_RKMPP_MPV_Guide.md`。扩展按场景**自动选路**：
 
 **路径一：noble + desktop + mesa-vpu（PPA 栈，零编译）**
 

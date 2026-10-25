@@ -27,7 +27,7 @@ jobs:
     steps:
       - id: gen
         run: |
-          ALL='["aio-3288c","h96-m9","h96s","am60-sa12","neardi-lz200"]'
+          ALL='["aio-3288c","h96s","am60-sa12","neardi-lz200"]'
           IN="${{ inputs.boards }}"
           if [ -n "$IN" ]; then
             echo "boards=$(echo "$IN" | tr ',' '\n' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
