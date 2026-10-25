@@ -35,6 +35,10 @@ Main() {
 		focal)
 			# your code here
 			;;
+		noble)
+			# Chinese desktop language support (Chromium UI / CJK fonts / pinyin IME)
+			[[ "${BUILD_DESKTOP}" == "yes" ]] && InstallChineseDesktopSupport
+			;;
 	esac
 } # Main
 
@@ -241,5 +245,24 @@ InstallAdvancedDesktop()
 	[[ -f /usr/share/doc/avahi-daemon/examples/ssh.service ]] && cp /usr/share/doc/avahi-daemon/examples/ssh.service /etc/avahi/services/
 	apt clean
 } # InstallAdvancedDesktop
+
+InstallChineseDesktopSupport()
+{
+	# Make Chromium + GNOME desktop render and input Chinese out of the box.
+	# Without these the image boots with LANG=zh_CN.UTF-8 but:
+	#   - Chromium shows an English UI (no zh-CN.pak -> chromium-l10n missing)
+	#   - Chinese web content relies on a single Droid fallback glyph set
+	#   - top-bar input method cannot switch to pinyin (ibus-libpinyin missing)
+	[[ "${BUILD_DESKTOP}" != "yes" ]] && return 0
+	export DEBIAN_FRONTEND=noninteractive
+	export APT_LISTCHANGES_FRONTEND=none
+	apt-get -y -q install --no-install-recommends \
+		chromium-l10n \
+		fonts-wqy-zenhei \
+		ibus-libpinyin
+	# Chinese system menus (non-fatal if the package is unavailable)
+	apt-get -y -q install --no-install-recommends language-pack-zh-hans || true
+	apt-get -y -q clean
+} # InstallChineseDesktopSupport
 
 Main "$@"
