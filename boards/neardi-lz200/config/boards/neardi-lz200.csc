@@ -390,3 +390,19 @@ function post_family_tweaks__neardi_lz200_cmdline() {
     
     return 0
 }
+
+# CMA 512M：rk35xx vendor 6.1 默认 CMA 仅 16MB（或 family 设的小值），
+# 4K60 VPU 解码缓冲池 / NPU 需要 ≥512M 连续内存；8GB+ 板风险低。
+function post_family_tweaks__neardi_lz200_cma_reserve() {
+    display_alert "$BOARD" "Bumping CMA to 512M for 4K VPU + NPU" "info"
+    local env="${SDCARD}/boot/armbianEnv.txt"
+    [[ -f "$env" ]] || { display_alert "$BOARD" "armbianEnv.txt not found; CMA fix skipped" "wrn"; return 0; }
+    # 幂等：已写 cma=512M 则跳过，避免重编重复追加
+    grep -q 'extraboardargs=.*cma=512M' "$env" && { display_alert "$BOARD" "CMA 512M already set; skip" "info"; return 0; }
+    if grep -q 'cma=' "$env"; then
+        sed -i -E 's/^extraboardargs=(.*)$/extraboardargs=\1 cma=512M/' "$env"
+    else
+        echo 'extraboardargs=cma=512M' >> "$env"
+    fi
+    return 0
+}

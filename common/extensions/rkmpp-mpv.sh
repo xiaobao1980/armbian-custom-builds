@@ -185,40 +185,120 @@ function post_install_kernel_debs__rkmpp_mpv() {
 		rm -f "${SDCARD}"/usr/local/sbin/install-rkmpp-mpv.sh
 	fi
 
-	# ---- 3. 全局 mpv 配置（X11 / OpenGL）----
-	display_alert "Writing global mpv.conf (X11/OpenGL)" "${EXTENSION}" "info"
-	mkdir -p "${SDCARD}"/etc/mpv
-	cat <<- 'MPVCONF' > "${SDCARD}"/etc/mpv/mpv.conf
-		# RKMPP 硬件加速 — X11 (非 Wayland) 全局配置
-		# 适用: XFCE / GNOME (X11) / Deepin + Panfrost (Mali GPU)
+		# ---- 3. 全局 mpv 配置（公共 + X11/Wayland 按会话选择）----
+	display_alert "Writing mpv.conf (common + X11/Wayland selectors + session launcher)" "${EXTENSION}" "info"
+	mkdir -p "${SDCARD}"/etc/mpv "${SDCARD}"/usr/local/etc/mpv
+	# 公共配置 (hwdec / 音频 / 字幕 / 缓存 / 性能, 不绑定显示服务器)
+	cat <<- 'MPVCOMMON' > "${SDCARD}"/etc/mpv/mpv.conf
+# =============================================================================
+# mpv.conf — Rockchip 公共配置 (X11 / Wayland 共用, 不绑定显示服务器)
+# 放置: /etc/mpv/mpv.conf 与 /usr/local/etc/mpv/mpv.conf
+# 会话专用覆盖见 mpv-x11.conf / mpv-wayland.conf (由 /usr/local/bin/mpv 按会话选择)
+# =============================================================================
 
-	# ========== 硬件解码 ==========
-	# 显式锁定 rkmpp: mpv 会从 libavcodec 动态枚举 wrapper 解码器
-	# (h264_rkmpp 等, wrapper_name=rkmpp) 注册为 hwdec 方法; 但 hwdec=auto
-	# 的探测白名单不含 rkmpp(排在最后且随机序), 显式指定才确定命中。
-	# rkmpp 初始化失败或该编码无 *_rkmpp 解码器时 mpv 自动回退软解。
-	hwdec=rkmpp
-	hwdec-codecs=all
+# ---------- 硬件解码 (Rockchip MPP VPU) ----------
+# rkmpp-copy: 全 rk 家族通用。零拷贝 rkmpp(drm_prime) 只能被 egl-x11/drm 导入,
+# 缺 egl-x11 的板(如 h96-m9)只能走 GLX, GLX 无法导入 drm_prime → 必须用 -copy。
+hwdec=rkmpp-copy
+hwdec-codecs=all
 
-		# ========== 视频输出 ==========
-		vo=gpu
-		# 强制 OpenGL: Panfrost Mali 不支持 Vulkan, 且绕开 Wayland
-		gpu-api=opengl
+# ---------- 视频输出 ----------
+vo=gpu
+gpu-api=opengl
 
-		# ========== 渲染质量（4K 性能优化）==========
-		profile=fast
-		scale=bilinear
+# ---------- 4K 性能 / 渲染质量 ----------
+profile=fast
+scale=bilinear
+cscale=bilinear
+scale-antiring=0
+deinterlace=auto
+denoise=no
+deband=no
+framedrop=vo
 
-		# ========== 缓冲 ==========
-		cache=yes
-		cache-secs=60
-		demuxer-max-bytes=50M
+# ---------- 同步 / 显示 ----------
+video-sync=display-resample
+override-display-fps=60
+target-prim=auto
+target-trc=auto
 
-		# ========== 字幕 ==========
-		sub-font-size=35
-		sub-color="#FFFFFFFF"
-		sub-border-color="#FF000000"
-	MPVCONF
+# ---------- 缓存 ----------
+cache=yes
+cache-secs=60
+demuxer-max-bytes=50M
+demuxer-max-back-bytes=25M
+
+# ---------- 音频 (PulseAudio / PipeWire-pulse) ----------
+ao=pulse
+audio-samplerate=48000
+audio-format=s16
+audio-buffer=0.5
+audio-latency=0.2
+volume=100
+volume-max=150
+volume-normalize=yes
+
+# ---------- 字幕 (中文) ----------
+sub-auto=fuzzy
+sub-font-size=40
+sub-font="Noto Sans CJK SC"
+sub-codepage=utf8:gb18030
+sub-pos=95
+sub-align=center
+sub-color="#FFFFFF"
+sub-border-color="#000000"
+sub-border-size=2
+sub-shadow-offset=1
+
+# ---------- 交互 / 界面 ----------
+cursor-autohide=1
+stop-screensaver=yes
+term-osd-bar=yes
+msg-level=vd=warn,ad=warn
+
+# ---------- 续播 / 播放列表 ----------
+save-position-on-quit=yes
+resume-playback=yes
+	MPVCOMMON
+	cp "${SDCARD}"/etc/mpv/mpv.conf "${SDCARD}"/usr/local/etc/mpv/mpv.conf
+	# X11 会话覆盖 (gpu-context=x11 / GLX + x11-* 优化)
+	cat <<- 'MPVX11' > "${SDCARD}"/etc/mpv/mpv-x11.conf
+# X11 会话专用覆盖 (由 /usr/local/bin/mpv 在 XDG_SESSION_TYPE=x11 时 --include)
+# 强制 GLX 上下文: Panfrost Mali 的 egl-x11 在部分板(如 h96-m9) DRI2 创建失败,
+# GLX (gl-x11) 稳定可用; 故 X11 下显式锁定 gpu-context=x11。
+gpu-context=x11
+x11-bypass-compositor=yes
+x11-netwm=yes
+x11-vsync=yes
+	MPVX11
+	cp "${SDCARD}"/etc/mpv/mpv-x11.conf "${SDCARD}"/usr/local/etc/mpv/mpv-x11.conf
+	# Wayland 会话覆盖 (gpu-context=wayland)
+	cat <<- 'MPVWAYLAND' > "${SDCARD}"/etc/mpv/mpv-wayland.conf
+# Wayland 会话专用覆盖 (由 /usr/local/bin/mpv 在 XDG_SESSION_TYPE=wayland 时 --include)
+# rkmpp-copy 走 CPU 回拷路径, 不依赖 drm_prime 零拷贝, Wayland 下可正常硬解。
+gpu-context=wayland
+	MPVWAYLAND
+	cp "${SDCARD}"/etc/mpv/mpv-wayland.conf "${SDCARD}"/usr/local/etc/mpv/mpv-wayland.conf
+	# 会话感知启动器: 按 XDG_SESSION_TYPE / WAYLAND_DISPLAY 选择对应 mpv.conf
+	cat <<- 'MPVWRAP' > "${SDCARD}"/usr/local/bin/mpv
+#!/bin/bash
+# Rockchip 会话感知 mpv 启动器: 按会话选择 X11 / Wayland 对应的 mpv.conf
+# 同时加载 Rockchip rkmpp ffmpeg 库 (若自编译路径 /usr/local/lib/ffmpeg-rkmpp 存在)
+# 优先级: /usr/local/bin/mpv 在 PATH 中位于 /usr/bin 之前, 故本文件覆盖发行版 mpv。
+
+MPV_REAL=/usr/bin/mpv
+[ -x /usr/bin/mpv.distrib ] && MPV_REAL=/usr/bin/mpv.distrib
+
+if [ -n "${WAYLAND_DISPLAY}" ] || [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+	SESS_CONF=/etc/mpv/mpv-wayland.conf
+else
+	SESS_CONF=/etc/mpv/mpv-x11.conf
+fi
+
+export LD_LIBRARY_PATH=/usr/local/lib/ffmpeg-rkmpp:/usr/local/lib:${LD_LIBRARY_PATH}
+exec "${MPV_REAL}" --include="${SESS_CONF}" "$@"
+	MPVWRAP
+	chmod +x "${SDCARD}"/usr/local/bin/mpv
 
 	# ---- 4. 全局非 Wayland: 桌面会话锁 X11 ----
 	display_alert "Forcing X11 session (disabling Wayland)" "${EXTENSION}" "info"

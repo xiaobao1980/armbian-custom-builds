@@ -144,14 +144,14 @@ function post_family_tweaks__h96_m9_enable_bluetooth() {
 	return 0
 }
 
-# CMA 256M：vendor 6.1 默认 CMA 仅 16MB，历史上 1080p framebuffer 分配失败
+# CMA 512M：vendor 6.1 默认 CMA 仅 16MB，历史上 1080p framebuffer 分配失败
 #（dmesg "failed to allocate 8364032 byte dma buffer"）→ HDMI 黑屏，加
-# cma=256M 后解决（4GB 内存板代价可忽略；2GB 板应改 128M）。
+# cma=512M 后解决（8GB+ 板推荐；4K60 VPU 解码缓冲池需 ≥512M；2GB 板应改 128M）。
 # 2026-08-29 实证：本板走 boot.scr + armbianEnv.txt（无 extlinux），
 # boot-rk3576.cmd 的 bootargs 拼接 ${extraargs} ${extraboardargs}，
 # 所以参数必须写进 armbianEnv.txt 的 extraboardargs。
 function post_family_tweaks__h96_m9_cma_reserve() {
-	display_alert "$BOARD" "Bumping CMA to 256M for HDMI framebuffer" "info"
+	display_alert "$BOARD" "Bumping CMA to 512M for 4K VPU + HDMI framebuffer" "info"
 
 	local env="$SDCARD/boot/armbianEnv.txt"
 	if [[ ! -f "$env" ]]; then
@@ -161,9 +161,9 @@ function post_family_tweaks__h96_m9_cma_reserve() {
 	if grep -q 'cma=' "$env"; then
 		: # already set, idempotent
 	elif grep -q '^extraboardargs=' "$env"; then
-		sed -i -E 's/^extraboardargs=(.*)$/extraboardargs=\1 cma=256M/' "$env"
+		sed -i -E 's/^extraboardargs=(.*)$/extraboardargs=\1 cma=512M/' "$env"
 	else
-		echo 'extraboardargs=cma=256M' >> "$env"
+		echo 'extraboardargs=cma=512M' >> "$env"
 	fi
 
 	return 0

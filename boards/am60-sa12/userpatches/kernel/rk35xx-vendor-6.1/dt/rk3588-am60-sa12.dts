@@ -269,11 +269,11 @@
 		#size-cells = <2>;
 		ranges;
 
-		/* Reserve 256MB memory for hdmirx-controller@fdee0000 */
+		/* Reserve 512MB CMA for hdmirx-controller@fdee0000 + VPU/NPU 4K buffers */
 		cma {
 			compatible = "shared-dma-pool";
 			reusable;
-			reg = <0x0 (256 * 0x100000) 0x0 (256 * 0x100000)>;
+			reg = <0x0 (512 * 0x100000) 0x0 (512 * 0x100000)>;
 			linux,cma-default;
 		};
 	};	// ok
@@ -823,7 +823,7 @@
 	status = "disabled";
 };
 
-/* Should work with at least 128MB cma reserved above. */
+/* Should work with at least 512MB cma reserved above. */
 &hdmirx_ctrler {
 	status = "okay";
 
