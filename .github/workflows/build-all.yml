@@ -96,7 +96,8 @@ jobs:
           if [ "${BUILD_DESKTOP}" = "yes" ]; then
             if [ -z "${DESKTOP_ENVIRONMENT:-}" ]; then echo "::error::BUILD_DESKTOP=yes 但 DESKTOP_ENVIRONMENT 为空"; exit 1; fi
             ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DESKTOP_ENVIRONMENT}"
-            if [ -n "${DESKTOP_TIER:-}" ]; then ARGS="${ARGS} DESKTOP_TIER=${DESKTOP_TIER}"; fi
+            # 优化: GitHub 6h runner 时限下, 桌面档位强制 base (减 rootfs 装包时间), 覆盖 build.env 里的 mid
+            ARGS="${ARGS} DESKTOP_TIER=base"
           fi
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
           echo "构建参数: ${ARGS}"
@@ -111,7 +112,6 @@ jobs:
             KERNEL_BTF=no \
             EXPERT=yes \
             SHARE_LOG=yes \
-            DOWNLOAD_MIRROR=china \
             COMPRESS_OUTPUTIMAGE=sha,img,xz \
             build
 
