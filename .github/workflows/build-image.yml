@@ -272,6 +272,7 @@ jobs:
           ./compile.sh \
             ${{ steps.args.outputs.args }} \
             KERNEL_CONFIGURE=no \
+            KERNEL_BTF=no \
             EXPERT=yes \
             SHARE_LOG=yes \
             DOWNLOAD_MIRROR=china \
