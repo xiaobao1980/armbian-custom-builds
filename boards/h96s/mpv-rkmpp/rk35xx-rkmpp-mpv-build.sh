@@ -121,7 +121,8 @@ install_deps() {
     liblua5.1-0-dev libuchardet-dev \
     libx264-dev libx265-dev libdav1d-dev \
     libvorbis-dev libogg-dev libmp3lame-dev libopus-dev \
-    libpulse-dev libpipewire-0.3-dev libasound2-dev
+    libpulse-dev libpipewire-0.3-dev libasound2-dev \
+    libgnutls28-dev
   if dpkg --compare-versions "$(meson --version 2>/dev/null || echo 0)" lt "1.1"; then
     pip3 install --break-system-packages -U meson ninja 2>/dev/null || pip3 install -U meson ninja
   fi
