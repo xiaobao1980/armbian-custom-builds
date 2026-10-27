@@ -196,9 +196,10 @@ jobs:
           pick() { [ -n "$2" ] && [ "$2" != "default" ] && printf '%s' "$2" || printf '%s' "$1"; }
           EDITION="$(pick "${EDITION_DEF}" "${IN_EDITION}")"
           DE="$(pick "${DE_DEF}" "${IN_DE}")"
-          # 优化: GitHub 6h runner 时限下, 桌面档位默认降为 base (仅基础桌面, 不含浏览器/媒体),
+          # 优化: GitHub 6h runner 时限下, 桌面档位默认降为 minimal (仅基础桌面, 不含浏览器/媒体),
           # 显著减少 rootfs 装包时间; 仅当用户显式选择非 default 档位时才用用户的.
-          TIER="$(pick base "${IN_TIER}")"
+          # 注意: armbian main 的 DESKTOP_TIER 只接受 minimal|mid|full, 没有 base.
+          TIER="$(pick minimal "${IN_TIER}")"
           BRANCH="$(pick "${BRANCH_DEF}" "${IN_KB}")"
           RELEASE="$(pick "${RELEASE_DEF}" "${IN_REL}")"
 
