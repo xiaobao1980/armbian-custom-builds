@@ -161,7 +161,22 @@ install_deps() {
     libx264-dev libx265-dev libdav1d-dev \
     libvorbis-dev libogg-dev libmp3lame-dev libopus-dev \
     libpulse-dev libpipewire-0.3-dev libasound2-dev \
-    libgnutls28-dev
+    libgnutls28-dev \
+    libplacebo-dev
+  # mpv >= 0.38 起 libplacebo 是硬依赖（meson.build: dependency('libplacebo', version: '>=6.338.2')）。
+  # 发行版对照：trixie 7.349 ✓ / noble 6.338.2 ✓ / bookworm 5.229 ✗ / jammy ✗
+  # 版本不足时提前报错，避免 meson 以 "Dependency not found" 形式难查地崩溃。
+  if pkg-config --exists libplacebo; then
+    local _plv; _plv=$(pkg-config --modversion libplacebo)
+    log "libplacebo: $_plv"
+    if dpkg --compare-versions "$_plv" lt "6.338.2"; then
+      log "错误: 发行版自带 libplacebo $_plv < 6.338.2，mpv $(echo "$MPV_TAG" | tr -d v) 硬依赖不满足。"
+      log "      请改用 trixie/noble 及以上发行版，或手动源码编译 libplacebo>=6.338.2 后重试。"
+      exit 1
+    fi
+  else
+    log "错误: libplacebo-dev 安装后 pkg-config 仍不可见，中止"; exit 1
+  fi
   if dpkg --compare-versions "$(meson --version 2>/dev/null || echo 0)" lt "1.1"; then
     pip3 install --break-system-packages -U meson ninja 2>/dev/null || pip3 install -U meson ninja
   fi
@@ -260,7 +275,7 @@ build_ffmpeg() {
 #   然后注入 nyanmisaka/boogiepop rkmpp 后端补丁（官方主线不含该后端）
 # -----------------------------------------------------------------------------
 prepare_mpv() {
-  log "== 准备 mpv 源码 (v$MPV_TAG) + 应用 rkmpp 补丁 =="
+  log "== 准备 mpv 源码 ($MPV_TAG) + 应用 rkmpp 补丁 =="
   cd "$SRC_DIR"
   local from_tarball=1
   if [ -f "$MPV_TARBALL" ]; then
