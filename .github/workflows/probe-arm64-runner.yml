@@ -1,0 +1,38 @@
+name: 探针 · arm64 托管 runner 可用性
+
+# 用途：验证 ubuntu-24.04-arm 托管 runner 在本仓库（private）是否可用。
+# 触发后 1 分钟内即可在 Actions 页面看到结论，避免拿 3 小时的真构建去试。
+# 结论：
+#   - success → 可用，真构建可传 runner=ubuntu-24.04-arm，原生编译免 qemu（快 15 倍）
+#   - 一直 queued 不动 → 不可用，需改用自托管 arm64 runner 或预编译缓存方案
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: 探测 ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04-arm
+    steps:
+      - name: 打印架构与资源
+        run: |
+          echo "runner label : ${{ matrix.os }}"
+          echo "arch         : $(uname -m)"
+          echo "kernel       : $(uname -r)"
+          echo "nproc        : $(nproc)"
+          echo "mem          : $(free -h | awk '/Mem:/{print $2}')"
+          echo "disk /       : $(df -h / | awk 'NR==2{print $4" free of "$2}')"
+          echo "os           : $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: 免费额度判定
+        run: |
+          if [ "$(uname -m)" = "aarch64" ]; then
+            echo "✅ arm64 原生 runner 可用 —— 构建可免 qemu"
+          else
+            echo "❌ 拿到的是 $(uname -m)，非 arm64"
+            exit 1
+          fi
