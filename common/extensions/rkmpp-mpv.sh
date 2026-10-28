@@ -7,9 +7,15 @@
 # =============================================================================
 #  v3 栈（与板端 192.168.50.105 验证通过的栈完全一致）
 # -----------------------------------------------------------------------------
-#  mpp(gitee jellyfin-mpp) -> rkrga(gitee jellyfin-rga)
-#   -> ffmpeg-rockchip(gitee, 隔离 /usr/local/lib/ffmpeg-rkmpp)
+#  mpp(github/gitee jellyfin-mpp) -> rkrga(gitee jellyfin-rga，仅 gitee 有该分支)
+#   -> ffmpeg-rockchip(github/gitee, 隔离 /usr/local/lib/ffmpeg-rkmpp)
 #   -> mpv(官方主线 v0.41.0 + nyanmisaka/boogiepop rkmpp 后端补丁 mpp.patch)
+#
+#  源码 clone 策略（v3.1）：github 优先、gitee 兜底，每个源重试 5 次。
+#  - CI (GitHub Actions) github 原生可达，避开 gitee 大仓库 early EOF：
+#      error: RPC failed; curl 56 GnuTLS recv error (-110) / fatal: early EOF
+#  - 板上 github 被封时自动回落 gitee（已验证）。
+#  - rga 的 jellyfin-rga 分支仅在 gitee 维护，故只走 gitee + 重试。
 #
 #  关键事实：mpv 官方 v0.41.0 主线 video/out/hwdec/ 只有 drmprime 帧格式后端，
 #  不含 rkmpp 解码后端（无 hwdec_rkmpp.c）。github.com/nyanmisaka/mpv 不存在(404)，
@@ -100,7 +106,11 @@ function post_install_kernel_debs__rkmpp_mpv() {
 			MPV_PATCH=/root/rkmpp-src/mpp.patch \
 			VIDEO_DIR=/root \
 			bash /usr/local/sbin/rk35xx-rkmpp-mpv-build.sh build" || {
-			display_alert "v3 rkmpp-mpv build failed; mpv may fall back to software decoding" "${EXTENSION}" "err"
+			# 中止整镜像构建：此前“仅告警不中止”会产出 success 但静默缺 rkmpp 的镜像
+			# （run 40562290671 / 40589991000 均因此伪装成功）。宁可让 CI 变红，
+			# 也不交付一个硬解失效、只能软解的镜像。
+			display_alert "v3 rkmpp-mpv build FAILED; aborting image build to avoid shipping a silently rkmpp-less image" "${EXTENSION}" "err"
+			exit 1
 		}
 	else
 		display_alert "Skipping rkmpp source build (RKMPP_MPV_SKIP_BUILD=yes)" "${EXTENSION}" "warn"

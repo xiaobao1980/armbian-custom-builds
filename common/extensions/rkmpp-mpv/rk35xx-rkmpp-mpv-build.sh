@@ -35,6 +35,45 @@ exec > >(tee -a "$LOG") 2>&1
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 # -----------------------------------------------------------------------------
+# git clone 健壮化：多源兜底 + 重试（解决 CI 弱网下 gitee 大仓库 early EOF）
+#   顺序：github 优先（CI Actions 原生可达），gitee 兜底（板上 github 被封时）。
+#   每个 URL 重试 5 次，失败后清理重来；全部失败返回非 0。
+# 用法: git_clone_retry <branch|""> <dest> <url1> [url2 ...]
+# -----------------------------------------------------------------------------
+setup_git_resilience() {
+  git config --global http.postBuffer 1048576000          # 1GB, 避免大仓库 early EOF
+  git config --global http.lowSpeedLimit 0
+  git config --global http.lowSpeedTime 999999
+  git config --global core.compression 0                  # 关压缩降 CPU/超时
+  git config --global http.maxRequestBuffer 1048576000
+  git config --global protocol.version 2
+}
+git_clone_retry() {
+  local branch="${1:-}"; local dest="$2"; shift 2
+  local urls=("$@")
+  local bflag=""
+  [ -n "$branch" ] && bflag="-b $branch"
+  setup_git_resilience
+  for url in "${urls[@]}"; do
+    for attempt in 1 2 3 4 5; do
+      log "[clone] 尝试 $attempt/5: $url"
+      rm -rf "$dest"
+      if git clone --depth=1 $bflag "$url" "$dest" >"/tmp/clone-$$.log" 2>&1; then
+        if [ -d "$dest/.git" ] || [ -d "$dest" ]; then
+          log "[clone] 成功: $url"
+          return 0
+        fi
+      fi
+      log "[clone] 失败 ($(tail -n1 "/tmp/clone-$$.log" 2>/dev/null)); 清理重试"
+      rm -rf "$dest"
+      sleep 8
+    done
+  done
+  log "[clone] 所有源/重试均失败"
+  return 1
+}
+
+# -----------------------------------------------------------------------------
 # 发行版探测（支持 noble / bookworm / trixie / jammy / resolute，仅 X11 桌面）
 # -----------------------------------------------------------------------------
 SUPPORTED_DISTROS="jammy noble bookworm trixie resolute deepin25"
@@ -134,7 +173,9 @@ install_deps() {
 build_mpp() {
   log "== 编译 mpp (gitee jellyfin-mpp) =="
   cd "$SRC_DIR"
-  rm -rf mpp && git clone -b jellyfin-mpp --depth=1 https://gitee.com/nyanmisaka/mpp.git
+  git_clone_retry jellyfin-mpp mpp \
+    https://github.com/nyanmisaka/mpp.git \
+    https://gitee.com/nyanmisaka/mpp.git
   cd mpp && mkdir -p build && cd build
   cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=ON -DBUILD_TEST=OFF ..
@@ -151,7 +192,10 @@ build_mpp() {
 build_rga() {
   log "== 编译 rkrga (gitee jellyfin-rga) =="
   cd "$SRC_DIR"
-  rm -rf rkrga && git clone -b jellyfin-rga --depth=1 https://gitee.com/nyanmisaka/rga.git rkrga
+  # 注：rga 的 jellyfin-rga 分支仅在 gitee 维护（github 无同名仓库，
+  # nyanmisaka/librga 也无该分支），故只用 gitee，靠重试解决偶发 early EOF。
+  git_clone_retry jellyfin-rga rkrga \
+    https://gitee.com/nyanmisaka/rga.git
   cd rkrga
   meson setup build --prefix=/usr/local --buildtype=release \
     --default-library=shared -Dlibdrm=false -Dlibrga_demo=false
@@ -173,7 +217,9 @@ build_ffmpeg() {
     log "ffmpeg-rockchip 已编译（含 rkmpp 解码器），跳过 clone/configure/make，直接安装"
     cd ffmpeg-rockchip
   else
-    rm -rf ffmpeg-rockchip && git clone --depth=1 https://gitee.com/nyanmisaka/ffmpeg-rockchip.git
+    git_clone_retry "" ffmpeg-rockchip \
+      https://github.com/nyanmisaka/ffmpeg-rockchip.git \
+      https://gitee.com/nyanmisaka/ffmpeg-rockchip.git
     cd ffmpeg-rockchip
     # mpp/rga 装在 /usr/local，Debian 的 pkg-config 默认不搜 /usr/local/lib/pkgconfig，
     # 不导出会导致 configure 静默 disable rkmpp（编出 ffmpeg 却无 *_rkmpp 解码器）。
@@ -223,7 +269,9 @@ prepare_mpv() {
   else
     log "未找到预置 tarball，尝试 gitee 镜像兜底..."
     rm -rf mpv
-    for url in https://gitee.com/src-openeuler/mpv.git https://gitee.com/mirrors/mpv.git; do
+    for url in https://github.com/mpv-player/mpv.git \
+               https://gitee.com/src-openeuler/mpv.git \
+               https://gitee.com/mirrors/mpv.git; do
       if git clone -b "$MPV_TAG" --depth=1 "$url" mpv 2>/dev/null && [ -d mpv/.git ]; then
         log "gitee 镜像克隆成功: $url"; from_tarball=0; break
       fi
