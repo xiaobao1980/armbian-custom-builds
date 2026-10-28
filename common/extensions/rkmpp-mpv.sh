@@ -85,6 +85,11 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	cp "${ASSET_DIR}/rk35xx-rkmpp-mpv-build.sh" "${SDCARD}/usr/local/sbin/rk35xx-rkmpp-mpv-build.sh"
 	cp "${ASSET_DIR}/mpp.patch" "${SDCARD}/root/rkmpp-src/mpp.patch"
 	chmod +x "${SDCARD}/usr/local/sbin/rk35xx-rkmpp-mpv-build.sh"
+	# 烧卡后一键校验脚本（可选资产，缺失不影响构建）
+	if [[ -f "${ASSET_DIR}/verify-rkmpp-image.sh" ]]; then
+		cp "${ASSET_DIR}/verify-rkmpp-image.sh" "${SDCARD}/usr/local/sbin/verify-rkmpp-image.sh"
+		chmod +x "${SDCARD}/usr/local/sbin/verify-rkmpp-image.sh"
+	fi
 
 	# ---- 2. 预拉 mpv v0.41.0 源码 tarball（best-effort，CI 有 github 访问）----
 	# 失败则 v3 脚本会回退到 gitee 镜像 clone（脚本内部已实现）。

@@ -411,7 +411,9 @@ sub-border-color="#FF000000"
 EOF
   mkdir -p /usr/local/etc/mpv
   ln -sfn /etc/mpv/mpv.conf /usr/local/etc/mpv/mpv.conf
+  # mpp_service = 硬解必需；rga = ffmpeg rkrga 缩放/格式转换滤镜（非解码必需，一并放开）
   echo 'KERNEL=="mpp_service", MODE="0666"' > /etc/udev/rules.d/99-mpp.rules
+  echo 'KERNEL=="rga", MODE="0666"' >> /etc/udev/rules.d/99-mpp.rules
   udevadm control --reload-rules 2>/dev/null || true
   udevadm trigger 2>/dev/null || true
   echo 1000 > /proc/mpp_service/load_interval 2>/dev/null || true
