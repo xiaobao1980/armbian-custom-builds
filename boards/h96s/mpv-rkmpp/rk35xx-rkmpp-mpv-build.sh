@@ -395,6 +395,8 @@ configure_runtime() {
   cat > /etc/mpv/mpv.conf <<'EOF'
 # RK35xx X11 — RKMPP 硬件加速配置
 # 桌面走 rkmpp-copy（双拷贝）；TTY/DRM 零拷贝见 mpv-lg4k.sh
+fullscreen=yes          # 默认全屏播放（命令行临时退出全屏：mpv --fs=no <file>）
+keep-open=no            # 播完立即自动退出，不留住最后一帧窗口
 hwdec=rkmpp
 hwdec-codecs=all
 vo=gpu                  # 0.41 起默认 gpu-next 渲染器
