@@ -162,7 +162,8 @@ install_deps() {
     libvorbis-dev libogg-dev libmp3lame-dev libopus-dev \
     libpulse-dev libpipewire-0.3-dev libasound2-dev \
     libgnutls28-dev \
-    libplacebo-dev
+    libplacebo-dev \
+    libxss-dev libxpresent-dev
   # mpv >= 0.38 起 libplacebo 是硬依赖（meson.build: dependency('libplacebo', version: '>=6.338.2')）。
   # 发行版对照：trixie 7.349 ✓ / noble 6.338.2 ✓ / bookworm 5.229 ✗ / jammy ✗
   # 版本不足时提前报错，避免 meson 以 "Dependency not found" 形式难查地崩溃。
@@ -180,6 +181,37 @@ install_deps() {
   if dpkg --compare-versions "$(meson --version 2>/dev/null || echo 0)" lt "1.1"; then
     pip3 install --break-system-packages -U meson ninja 2>/dev/null || pip3 install -U meson ninja
   fi
+}
+
+# -----------------------------------------------------------------------------
+# 依赖前置体检：把「干净环境才暴露的硬依赖」一次性查清
+# 背景：gnutls / libplacebo / xscrnsaver / xpresent 都是同一类病——历史装过 dev 包的
+# 主机一直正常，一上干净 chroot 或新烧板就炸，且 meson 只会报 "Dependency not found"
+# 不报该装哪个包，导致每次都要靠一轮 20min 板端/3h CI 去猜。这里开工前统一体检。
+# -----------------------------------------------------------------------------
+check_build_libs() {
+  log "== 依赖前置体检 =="
+  local miss=0 p libs
+  libs=(
+    "libdrm:libdrm-dev"
+    "libdisplay-info:libdisplay-info-dev"
+    "libplacebo:libplacebo-dev"
+    "xscrnsaver:libxss-dev"
+    "xpresent:libxpresent-dev"
+    "x11:libx11-dev"
+    "gl:libgl1-mesa-dev"
+    "egl:libegl1-mesa-dev"
+  )
+  for p in "${libs[@]}"; do
+    if pkg-config --exists "${p%%:*}"; then
+      log "  ✓ ${p%%:*}"
+    else
+      log "  ✗ ${p%%:*} 缺失 → 请安装 ${p##*:}"
+      miss=1
+    fi
+  done
+  [ "$miss" -eq 0 ] || {
+    log "错误: 依赖体检未通过，请先安装上面列出的包（apt-get install -y ...）后重试"; exit 1; }
 }
 
 # -----------------------------------------------------------------------------
@@ -423,6 +455,7 @@ case "${1:-build}" in
     detect_distro
     do_uninstall
     install_deps
+    check_build_libs
     build_mpp
     build_rga
     build_ffmpeg
