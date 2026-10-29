@@ -146,6 +146,10 @@ do_uninstall() {
   rm -f /etc/udev/rules.d/99-mpp.rules 2>/dev/null || true
   rm -f /etc/mpv/mpv.conf /usr/local/etc/mpv/mpv.conf 2>/dev/null || true
   rmdir /etc/mpv /usr/local/etc/mpv 2>/dev/null || true
+  # 桌面菜单项与图标
+  rm -f /usr/share/applications/mpv.desktop \
+        /usr/share/icons/hicolor/scalable/apps/mpv.svg \
+        /usr/local/bin/mpv-desktop 2>/dev/null || true
   # 构建标记（跨发行版/架构重编的判断依据）
   rm -rf /usr/local/share/rkmpp-stack 2>/dev/null || true
   ldconfig
@@ -395,6 +399,74 @@ build_mpv() {
 }
 
 # -----------------------------------------------------------------------------
+# 桌面集成：.desktop 菜单项 + 图标（缺这两个，XFCE/GNOME 开始菜单里搜不到 mpv）
+# -----------------------------------------------------------------------------
+install_desktop_entry() {
+  local APPDIR=/usr/share/applications
+  local ICONROOT=/usr/share/icons/hicolor
+  mkdir -p "$APPDIR" "$ICONROOT/scalable/apps"
+  # 菜单入口 wrapper：mpv 无参数会打印用法并退出（点了等于没反应），
+  # 无参时开 idle 窗口（非全屏、可拖拽文件），带参时按 mpv.conf 正常全屏播放。
+  cat > /usr/local/bin/mpv-desktop <<'EOF'
+#!/bin/sh
+# 桌面菜单入口（由 rkmpp-mpv 栈安装）
+if [ "$#" -eq 0 ]; then
+  exec /usr/local/bin/mpv --player-operation-mode=pseudo-gui --no-fullscreen --force-window=yes
+fi
+exec /usr/local/bin/mpv -- "$@"
+EOF
+  chmod 0755 /usr/local/bin/mpv-desktop
+  cat > "$APPDIR/mpv.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=mpv
+Name[zh_CN]=mpv 播放器
+GenericName=Media Player
+GenericName[zh_CN]=媒体播放器
+Comment=RKMPP hardware-accelerated video player
+Comment[zh_CN]=RKMPP 硬件加速视频播放器（RK35xx）
+Exec=/usr/local/bin/mpv-desktop %U
+TryExec=/usr/local/bin/mpv
+Icon=mpv
+Terminal=false
+Categories=AudioVideo;Video;Player;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mp2t;video/x-flv;video/mpeg;audio/mpeg;audio/flac;audio/x-wav;audio/ogg;
+Keywords=mpv;player;video;rkmpp;hardware;
+StartupNotify=false
+EOF
+  chmod 644 "$APPDIR/mpv.desktop"
+  # 自带图标：避免依赖 Icon=mpv 在发行版主题里恰好存在（trixie 的 hicolor 没有）
+  cat > "$ICONROOT/scalable/apps/mpv.svg" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="4" y="4" width="120" height="120" rx="22" fill="#7b1fa2"/>
+  <path d="M50 36 L50 92 L96 64 Z" fill="#ffffff"/>
+</svg>
+EOF
+  chmod 644 "$ICONROOT/scalable/apps/mpv.svg"
+  command -v update-desktop-database >/dev/null && update-desktop-database "$APPDIR" 2>/dev/null || true
+  command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t "$ICONROOT" 2>/dev/null || true
+  # 可选：把视频/音频默认打开方式设为 mpv（MPV_SET_DEFAULT=yes 才动，避免覆盖用户偏好）
+  if [ "${MPV_SET_DEFAULT:-no}" = "yes" ]; then
+    mkdir -p /etc/xdg
+    cat > /etc/xdg/mimeapps.list <<'EOF'
+[Default Applications]
+video/mp4=mpv.desktop
+video/x-matroska=mpv.desktop
+video/webm=mpv.desktop
+video/quicktime=mpv.desktop
+video/x-msvideo=mpv.desktop
+video/mp2t=mpv.desktop
+audio/mpeg=mpv.desktop
+audio/flac=mpv.desktop
+EOF
+    log "已把视频/音频默认打开方式设为 mpv（/etc/xdg/mimeapps.list）"
+  fi
+  log "桌面菜单项: $APPDIR/mpv.desktop（菜单里搜 \"mpv\" 或 \"播放器\"）"
+}
+
+# -----------------------------------------------------------------------------
 # 运行时配置：mpv.conf / udev / CMA
 # -----------------------------------------------------------------------------
 configure_runtime() {
@@ -419,6 +491,7 @@ sub-border-color="#FF000000"
 EOF
   mkdir -p /usr/local/etc/mpv
   ln -sfn /etc/mpv/mpv.conf /usr/local/etc/mpv/mpv.conf
+  install_desktop_entry
   # mpp_service = 硬解必需；rga = ffmpeg rkrga 缩放/格式转换滤镜（非解码必需，一并放开）
   echo 'KERNEL=="mpp_service", MODE="0666"' > /etc/udev/rules.d/99-mpp.rules
   echo 'KERNEL=="rga", MODE="0666"' >> /etc/udev/rules.d/99-mpp.rules

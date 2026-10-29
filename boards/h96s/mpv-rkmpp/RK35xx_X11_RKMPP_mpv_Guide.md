@@ -239,10 +239,47 @@ EOF
 
 ```bash
 echo 'KERNEL=="mpp_service", MODE="0666"' | sudo tee /etc/udev/rules.d/99-mpp.rules
+# rga 不参与解码，但 ffmpeg -vf scale_rkrga 等滤镜需要；v3.5 起脚本会一并写入
+echo 'KERNEL=="rga", MODE="0666"' | sudo tee -a /etc/udev/rules.d/99-mpp.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 # 启用 MPP 负载统计（可选）
 echo 1000 | sudo tee /proc/mpp_service/load_interval
+```
+
+> 早期安装（v3.3）只写了 `mpp_service` 一行，`/dev/rga` 会停在 `crw-------`。
+> `verify-rkmpp-image.sh` 第 3 段现已自愈：缺行自动补 + reload/trigger，仍不生效则 `chmod 666` 兜底。
+
+---
+
+## 九·五、桌面菜单里找不到 mpv（XFCE/GNOME）
+
+**症状**：终端里 `mpv` 能跑，但开始菜单/应用查找器搜不到 "mpv"。原因不在 PATH，
+而是栈只装了 `/usr/local/bin/mpv`，**没有 `.desktop` 菜单项**（发行版的 mpv 包才会带）。
+
+栈（v3.6 起）会在 `configure_runtime` 阶段安装三样东西：
+
+| 文件 | 作用 |
+|---|---|
+| `/usr/share/applications/mpv.desktop` | 菜单项，`Name=mpv` / `Name[zh_CN]=mpv 播放器`，类别 AudioVideo;Video;Player |
+| `/usr/share/icons/hicolor/scalable/apps/mpv.svg` | 菜单图标（`Icon=mpv`；trixie 的 hicolor 里没有现成 mpv 图标） |
+| `/usr/local/bin/mpv-desktop` | 菜单入口 wrapper：**无参时开 idle 窗口**（非全屏、可拖拽文件），带参时按 `mpv.conf` 正常全屏播放 |
+
+为什么需要 wrapper：`mpv` 不带参数会打印用法后立即退出，菜单项直接 `Exec=mpv %U` 点了"像没反应"。
+
+装完刷新（XFCE 通常重开菜单即生效）：
+
+```bash
+sudo update-desktop-database /usr/share/applications 2>/dev/null
+sudo gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null
+# 验证菜单项能真正拉起窗口（无参 → idle 窗口常驻）
+DISPLAY=:0 XAUTHORITY=/home/$USER/.Xauthority /usr/local/bin/mpv-desktop   # Ctrl+C/q 退出
+```
+
+想把视频/音频默认打开方式设为 mpv（可选，会写 `/etc/xdg/mimeapps.list`）：
+
+```bash
+sudo MPV_SET_DEFAULT=yes bash rk35xx-rkmpp-mpv-build.sh build   # 重跑配置阶段
 ```
 
 ---

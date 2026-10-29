@@ -50,7 +50,10 @@ MULTIARCH="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo "${ARCH}
 [ -r /etc/os-release ] && . /etc/os-release
 DISTRO_ID="${ID:-unknown}"
 DISTRO_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-unknown}}"
-GLIBC="$(ldd --version 2>/dev/null | head -1 | awk '{print $NF}')"
+# 注意：`set -o pipefail` + `head -1` 铁律——上游一次 write 多行时 head 提前退出关闭管道，
+# 上游收到 SIGPIPE，pipefail 把整条命令判为 141，`set -e` 直接中止（曾导致打包静默失败）。
+# 统一改用 `sed -n 1p`（读完整个流，不会引发 SIGPIPE）。
+GLIBC="$(ldd --version 2>/dev/null | sed -n 1p | awk '{print $NF}')"
 
 # ---- 0. 前置检查：栈必须完整装好 ----
 [ -x "$PREFIX/bin/mpv" ]  || die "$PREFIX/bin/mpv 不存在，请先 build"
@@ -58,13 +61,14 @@ GLIBC="$(ldd --version 2>/dev/null | head -1 | awk '{print $NF}')"
 [ -d "$PREFIX/lib/ffmpeg-rkmpp" ] || die "$PREFIX/lib/ffmpeg-rkmpp 不存在，请先 build"
 [ -f /etc/mpv/mpv.conf ] || die "/etc/mpv/mpv.conf 不存在，请先 build（configure_runtime）"
 
-MPV_RAW="$("$PREFIX/bin/mpv" --version 2>/dev/null | head -1 | awk '{print $2}')"
+MPV_RAW="$("$PREFIX/bin/mpv" --version 2>/dev/null | sed -n 1p | awk '{print $2}')"
 MPV_BASE="${MPV_RAW%%-*}"                      # v0.41.0-dirty -> v0.41.0
 MPV_BASE="${MPV_BASE#v}"                       # -> 0.41.0（dpkg 版本号不能以 v 开头）
 VERSION="${VERSION_OVERRIDE:-${MPV_BASE:-0.41.0}-1}"
-MPP_VER="$(pkg-config --modversion rockchip_mpp 2>/dev/null || echo unknown)"
-RGA_VER="$(pkg-config --modversion librga 2>/dev/null || echo unknown)"
-FFMPEG_VER="$("$PREFIX/bin/ffmpeg" -hide_banner -version 2>/dev/null | head -1 | awk '{print $3}')"
+PKGCFG="$(command -v pkg-config 2>/dev/null || command -v pkgconf 2>/dev/null || true)"
+MPP_VER="$([ -n "$PKGCFG" ] && "$PKGCFG" --modversion rockchip_mpp 2>/dev/null || echo unknown)"
+RGA_VER="$([ -n "$PKGCFG" ] && "$PKGCFG" --modversion librga 2>/dev/null || echo unknown)"
+FFMPEG_VER="$("$PREFIX/bin/ffmpeg" -hide_banner -version 2>/dev/null | sed -n 1p | awk '{print $3}')"
 
 log "目标: $PKG $VERSION  arch=$ARCH multiarch=$MULTIARCH  distro=$DISTRO_CODENAME($DISTRO_ID) glibc=$GLIBC"
 
@@ -85,6 +89,9 @@ add "$PREFIX"/lib/"$MULTIARCH"/librga.so* "$PREFIX"/lib/"$MULTIARCH"/pkgconfig/*
 add "$PREFIX"/lib/pkgconfig/*.pc
 add /etc/mpv/mpv.conf /etc/udev/rules.d/99-mpp.rules /etc/ld.so.conf.d/99-ffmpeg-rockchip.conf
 add "$PREFIX/etc/mpv/mpv.conf"          # 软链（若存在）
+add /usr/share/applications/mpv.desktop                        # 桌面菜单项
+add /usr/share/icons/hicolor/scalable/apps/mpv.svg             # 菜单图标
+add "$PREFIX/bin/mpv-desktop"                                  # 菜单入口 wrapper（无参开 idle 窗口）
 
 [ "${#SRC[@]}" -gt 0 ] || die "未收集到任何文件"
 log "收集 ${#SRC[@]} 个路径，复制到 staging…"
@@ -180,6 +187,9 @@ if [ -d /run/udev ] || [ -d /dev/.udev ]; then
   udevadm control --reload-rules 2>/dev/null || true
   udevadm trigger 2>/dev/null || true
 fi
+# 桌面菜单项刷新（XFCE/GNOME 才能立即搜到 mpv）
+command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications 2>/dev/null || true
+command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null || true
 exit 0
 EOF
 chmod 0755 "$STAGE/DEBIAN/postinst"
@@ -196,7 +206,8 @@ dpkg-deb -c "$DEB" > "$WORK/deb.list" 2>/dev/null
 local_n=$(wc -l < "$WORK/deb.list" | tr -d ' ')
 log "    文件条目: $local_n"
 for need in ./usr/local/bin/mpv ./usr/local/bin/ffmpeg ./usr/local/lib/ffmpeg-rkmpp ./etc/mpv/mpv.conf \
-            ./usr/local/share/rkmpp-stack/build-info; do
+            ./usr/local/share/rkmpp-stack/build-info ./usr/share/applications/mpv.desktop \
+            ./usr/share/icons/hicolor/scalable/apps/mpv.svg ./usr/local/bin/mpv-desktop; do
   grep -q " $need" "$WORK/deb.list" || die "产物缺少 $need"
 done
 log "    关键路径齐全"

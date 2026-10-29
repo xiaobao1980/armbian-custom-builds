@@ -163,6 +163,81 @@ else
   bad "未找到 mpv.conf"
 fi
 
+echo "--- 5.5 桌面菜单项（开始菜单/应用查找器里能否搜到 mpv）---"
+DESKTOP_FILE=/usr/share/applications/mpv.desktop
+DESKTOP_ICON=/usr/share/icons/hicolor/scalable/apps/mpv.svg
+DESK_OK=0
+[ -f "$DESKTOP_FILE" ] && grep -q '^Exec=/usr/local/bin/mpv-desktop' "$DESKTOP_FILE" && DESK_OK=1
+if [ "$DESK_OK" = "1" ]; then
+  ok "菜单项存在且指向 wrapper: $DESKTOP_FILE"
+else
+  if [ "$(id -u)" = "0" ]; then
+    mkdir -p /usr/share/applications
+    cat > "$DESKTOP_FILE" <<'DESKEOF'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=mpv
+Name[zh_CN]=mpv 播放器
+GenericName=Media Player
+GenericName[zh_CN]=媒体播放器
+Comment=RKMPP hardware-accelerated video player
+Comment[zh_CN]=RKMPP 硬件加速视频播放器（RK35xx）
+Exec=/usr/local/bin/mpv-desktop %U
+TryExec=/usr/local/bin/mpv
+Icon=mpv
+Terminal=false
+Categories=AudioVideo;Video;Player;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mp2t;video/x-flv;video/mpeg;audio/mpeg;audio/flac;audio/x-wav;audio/ogg;
+Keywords=mpv;player;video;rkmpp;hardware;
+StartupNotify=false
+DESKEOF
+    chmod 644 "$DESKTOP_FILE"
+    ok "菜单项缺失或 Exec 过旧，已写入 wrapper 版本（重开应用菜单即可搜到）"
+  else
+    bad "缺 $DESKTOP_FILE（需 root 创建）"
+  fi
+fi
+if [ -f "$DESKTOP_ICON" ]; then
+  ok "菜单图标存在: $DESKTOP_ICON"
+elif [ "$(id -u)" = "0" ]; then
+  mkdir -p "$(dirname "$DESKTOP_ICON")"
+  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+    '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">' \
+    '  <rect x="4" y="4" width="120" height="120" rx="22" fill="#7b1fa2"/>' \
+    '  <path d="M50 36 L50 92 L96 64 Z" fill="#ffffff"/>' \
+    '</svg>' > "$DESKTOP_ICON"
+  chmod 644 "$DESKTOP_ICON"
+  ok "菜单图标缺失，已补（Icon=mpv）"
+else
+  warn "缺 $DESKTOP_ICON —— 菜单项会显示空白图标"
+fi
+WRAP=/usr/local/bin/mpv-desktop
+if [ -x "$WRAP" ]; then
+  ok "桌面入口 wrapper 存在: $WRAP"
+elif [ "$(id -u)" = "0" ]; then
+  cat > "$WRAP" <<'WEOF'
+#!/bin/sh
+# 桌面菜单入口（mpv 无参数会打印用法并退出，这里改成开 idle 窗口）
+if [ "$#" -eq 0 ]; then
+  exec /usr/local/bin/mpv --player-operation-mode=pseudo-gui --no-fullscreen --force-window=yes
+fi
+exec /usr/local/bin/mpv -- "$@"
+WEOF
+  chmod 0755 "$WRAP"
+  ok "桌面入口 wrapper 缺失，已创建（无参时开 idle 窗口，可拖拽文件）"
+else
+  warn "缺 $WRAP —— 从菜单点开不会有窗口（需 root 创建）"
+fi
+if [ -f "$DESKTOP_FILE" ]; then
+  if grep -q '^Exec=/usr/local/bin/mpv' "$DESKTOP_FILE" && grep -q '^\[Desktop Entry\]' "$DESKTOP_FILE"; then
+    ok "菜单项 Exec 指向 /usr/local/bin/mpv*（非社区版）"
+  else
+    warn "菜单项 Exec 不是 /usr/local/bin/mpv，可能指向 apt 版 mpv"
+  fi
+  command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+
 echo "--- 6. 真实播放测试（可选）---"
 CLIP="${1:-}"
 if [ -z "$CLIP" ]; then
