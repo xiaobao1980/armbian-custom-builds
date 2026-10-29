@@ -26,6 +26,14 @@
 #  本扩展自带 assets（与 boards/h96s/mpv-rkmpp/ 同源，提交时一并纳入版本控制）：
 #    assets/rkmpp-mpv/rk35xx-rkmpp-mpv-build.sh  —— v3 一键编译脚本
 #    assets/rkmpp-mpv/mpp.patch                  —— rkmpp 后端补丁
+#    assets/rkmpp-mpv/verify-rkmpp-image.sh      —— 烧卡后一键校验脚本
+#    assets/rkmpp-mpv/prebuilt/*.deb             —— 预编译栈（CI 用，非必需）
+#
+#  两条安装路径（v3.4）：
+#    A. 预编译 deb（默认）: CI 6h 上限装不下 qemu 源码编译，秒级安装 + apt 自动补运行库。
+#       由 workflow 用 `gh release download` 放到 assets/prebuilt/ 下。
+#    B. 源码编译（回退）: RKMPP_MPV_PREBUILT=no，或 deb 缺失/校验失败时触发。
+#       板上（8 核原生）走这条，全程约 20-45 分钟。
 #
 #  生效条件（全局, 所有 vendor 内核 Rockchip 板）:
 #    * BRANCH=vendor 且 LINUXFAMILY=rk35xx / rockchip-rk3588（BSP 内核带 rkmpp 驱动）
@@ -102,8 +110,39 @@ function post_install_kernel_debs__rkmpp_mpv() {
 		|| display_alert "mpv tarball download failed; v3 script will try gitee clone fallback" "${EXTENSION}" "warn"
 	fi
 
+	# ---- 2.5 预编译包快路径（默认）----
+	# 背景：GitHub-hosted runner 只有 2 vCPU，x86 上还需 qemu 模拟 arm64。实测栈源码编译
+	#   mpp 17.5m + rkrga 1.5m + ffmpeg-rockchip 3h09m + mpv >1h（qemu 放大 ~15 倍），
+	#   加上 kernel 1h52m 必然撞 GitHub Actions 6h 上限 —— run 40623907079 即在
+	#   mpv 编译 68/258 处被 cancel（conclusion=cancelled，非 failure）。
+	# 故默认改为安装预编译 rkmpp-stack.deb（11MB，dpkg-shlibdeps 自动算好运行库依赖），
+	#   安装耗时秒级；源码编译回退路径保留（RKMPP_MPV_PREBUILT=no 或包缺失/校验失败时）。
+	local PREBUILT_DIR="${ASSET_DIR}/prebuilt"
+	local DEB="" PREBUILT_OK=0
+	DEB="$(ls -1 "${PREBUILT_DIR}"/rkmpp-stack_*_arm64.deb 2>/dev/null | head -1)"
+	if [[ -n "${DEB}" && "${RKMPP_MPV_PREBUILT:-yes}" == "yes" ]]; then
+		display_alert "Installing prebuilt rkmpp-stack deb: $(basename "${DEB}")" "${EXTENSION}" "info"
+		cp "${DEB}" "${SDCARD}/root/rkmpp-src/"
+		if chroot_sdcard "apt-get update -qq" &&
+			chroot_sdcard "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /root/rkmpp-src/$(basename "${DEB}")"; then
+			local _hwdec _dec
+			_hwdec="$(chroot_sdcard "bash -c 'mpv --hwdec=help 2>/dev/null | grep -c rkmpp'" || echo 0)"
+			_dec="$(chroot_sdcard "bash -c '/usr/local/bin/ffmpeg -decoders 2>/dev/null | grep -c _rkmpp'" || echo 0)"
+			if [[ "${_hwdec:-0}" -ge 1 && "${_dec:-0}" -ge 8 ]]; then
+				display_alert "Prebuilt rkmpp-stack verified: mpv hwdec=${_hwdec} ffmpeg decoders=${_dec}" "${EXTENSION}" "info"
+				PREBUILT_OK=1
+			else
+				display_alert "Prebuilt stack verification failed (hwdec=${_hwdec}, decoders=${_dec}); falling back to source build" "${EXTENSION}" "warn"
+			fi
+		else
+			display_alert "apt install of prebuilt deb failed; falling back to source build" "${EXTENSION}" "warn"
+		fi
+	fi
+
 	# ---- 3. chroot 内执行 v3 一键编译（mpp/rga/ffmpeg-rockchip/mpv+rkmpp 补丁）----
-	if [[ "${RKMPP_MPV_SKIP_BUILD:-no}" != "yes" ]]; then
+	if [[ "${PREBUILT_OK}" -eq 1 ]]; then
+		display_alert "Skipping source build: prebuilt rkmpp-stack installed and verified" "${EXTENSION}" "info"
+	elif [[ "${RKMPP_MPV_SKIP_BUILD:-no}" != "yes" ]]; then
 		display_alert "Building RKMPP+mpv v3 stack in chroot (this takes a while)" "${EXTENSION}" "info"
 		# 用 env 传参（chroot_sdcard 直接把参数交给 chroot，无 shell 包裹）
 		chroot_sdcard "env BUILD_BASE=/root/rkmpp-build \

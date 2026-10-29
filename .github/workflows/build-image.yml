@@ -168,6 +168,39 @@ jobs:
       - name: 同步板卡自定义文件 (仅该板卡, 互不干扰)
         run: bash scripts/sync-board-to-build.sh "${{ inputs.board }}" armbian-build
 
+      - name: 预拉 rkmpp-stack 预编译包 (避免 CI 6h 上限内编不完)
+        # 背景: GitHub-hosted runner 只有 2 vCPU; x86 上还需 qemu 模拟 arm64, 栈源码编译
+        # 实测 mpp 17.5m + ffmpeg 3h09m + mpv >1h, 加上 kernel 1h52m 必然撞 6h 上限
+        # (run 40623907079 即在 mpv 68/258 处被 cancel)。故默认走 11MB 预编译 deb,
+        # 秒级安装; 下载失败时扩展自动回退源码编译。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          D="armbian-build/userpatches/extensions/rkmpp-mpv/prebuilt"
+          mkdir -p "$D"
+          if command -v gh >/dev/null 2>&1; then
+            if gh release download rkmpp-stack-v0.41.0-1 --repo "$GH_REPO" \
+                 --pattern 'rkmpp-stack_*_arm64.deb' --dir "$D"; then
+              echo "预编译包已就位:"; ls -lh "$D"
+            else
+              echo "::warning::预编译包下载失败, rkmpp-mpv 扩展将回退源码编译(可能撞 6h 上限)"
+            fi
+          else
+            echo "::warning::无 gh CLI, rkmpp-mpv 扩展将回退源码编译"
+          fi
+
+      - name: 缓存 Armbian 构建产物 (kernel/uboot debs + rootfs, 加速重试)
+        uses: actions/cache@v4
+        with:
+          path: |
+            armbian-build/output/debs
+            armbian-build/cache/rootfs
+          key: armbian-${{ inputs.board }}-${{ inputs.kernel_branch }}-${{ inputs.release }}-${{ inputs.desktop_environment }}-v1
+          restore-keys: |
+            armbian-${{ inputs.board }}-${{ inputs.kernel_branch }}-${{ inputs.release }}-
+
       - name: 组装构建参数 (build.env 默认 + 下拉覆盖)
         id: args
         env:
