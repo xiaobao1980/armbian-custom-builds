@@ -59,7 +59,8 @@ GLIBC="$(ldd --version 2>/dev/null | head -1 | awk '{print $NF}')"
 [ -f /etc/mpv/mpv.conf ] || die "/etc/mpv/mpv.conf 不存在，请先 build（configure_runtime）"
 
 MPV_RAW="$("$PREFIX/bin/mpv" --version 2>/dev/null | head -1 | awk '{print $2}')"
-MPV_BASE="${MPV_RAW%%-*}"                      # 0.41.0-dirty -> 0.41.0
+MPV_BASE="${MPV_RAW%%-*}"                      # v0.41.0-dirty -> v0.41.0
+MPV_BASE="${MPV_BASE#v}"                       # -> 0.41.0（dpkg 版本号不能以 v 开头）
 VERSION="${VERSION_OVERRIDE:-${MPV_BASE:-0.41.0}-1}"
 MPP_VER="$(pkg-config --modversion rockchip_mpp 2>/dev/null || echo unknown)"
 RGA_VER="$(pkg-config --modversion librga 2>/dev/null || echo unknown)"
@@ -132,9 +133,17 @@ $PKG ($VERSION) unstable; urgency=medium
  -- xiaobao <xiaobao@local>  $(date -R)
 EOF
 
-log "计算 Depends（dpkg-shlibdeps）…"
+log "计算 Depends（dpkg-shlibdeps，覆盖全部 ELF：bin + 全部 .so，取完整运行库闭包）…"
+# 只喂 3 个 bin 会漏掉 libavcodec 的传递依赖（libx264/libx265/libdav1d/libgnutls…），
+# 导致装到目标板后运行时缺库。这里把 bin 与所有真实 .so 一起喂进去，得到完整闭包。
+SHLIB_INPUTS=()
+while IFS= read -r _f; do
+  head -c 4 "$_f" 2>/dev/null | grep -qa 'ELF' && SHLIB_INPUTS+=("${_f#$STAGE}")
+done < <(find "$STAGE$PREFIX/bin" "$STAGE$PREFIX/lib" -type f 2>/dev/null)
+[ "${#SHLIB_INPUTS[@]}" -gt 0 ] || die "staging 中未找到任何 ELF 文件"
+log "  ELF 输入: ${#SHLIB_INPUTS[@]} 个"
 DEPS="$(cd "$WORK" && dpkg-shlibdeps --ignore-missing-info -O \
-          "$PREFIX/bin/mpv" "$PREFIX/bin/ffmpeg" "$PREFIX/bin/ffprobe" \
+          "${SHLIB_INPUTS[@]}" \
           -l"$PREFIX/lib/ffmpeg-rkmpp" -l"$PREFIX/lib" -l"$PREFIX/lib/$MULTIARCH" 2>"$WORK/shlibdeps.err" \
         | sed -n 's/^shlibs:Depends=//p' || true)"
 if [ -z "$DEPS" ]; then
@@ -182,11 +191,13 @@ dpkg-deb --root-owner-group --build "$STAGE" "$DEB" >/dev/null
 
 log "自检："
 dpkg-deb -f "$DEB" Package Version Architecture | sed 's/^/    /'
-local_n=$(dpkg-deb -c "$DEB" | wc -l | tr -d ' ')
+# 先落文件再 grep：避免 `dpkg-deb -c | grep -q` 在 pipefail 下因 SIGPIPE 误报缺文件
+dpkg-deb -c "$DEB" > "$WORK/deb.list" 2>/dev/null
+local_n=$(wc -l < "$WORK/deb.list" | tr -d ' ')
 log "    文件条目: $local_n"
 for need in ./usr/local/bin/mpv ./usr/local/bin/ffmpeg ./usr/local/lib/ffmpeg-rkmpp ./etc/mpv/mpv.conf \
             ./usr/local/share/rkmpp-stack/build-info; do
-  dpkg-deb -c "$DEB" | grep -q " $need" || die "产物缺少 $need"
+  grep -q " $need" "$WORK/deb.list" || die "产物缺少 $need"
 done
 log "    关键路径齐全"
 if command -v sha256sum >/dev/null; then sha256sum "$DEB" | sed 's/^/    /'; fi
