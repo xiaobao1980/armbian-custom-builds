@@ -30,7 +30,7 @@ new file mode 100644
 index 000000000000..1234567890ab
 --- /dev/null
 +++ b/arch/arm64/configs/rk3576_neardi_lz200_defconfig
-@@ -0,0 +1,595 @@
+@@ -0,0 +1,673 @@
 +CONFIG_WERROR=y
 +CONFIG_DEFAULT_HOSTNAME="localhost"
 +CONFIG_SYSVIPC=y

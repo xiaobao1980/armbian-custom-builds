@@ -1182,7 +1182,7 @@ new file mode 100755
 index 000000000000..c64521fcee7b
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3576-neardi-lz200-sound-ctl.dtsi
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,103 @@
 +&{/} {
 +    es8388_sound: es8388-sound {
 +		status = "okay";
