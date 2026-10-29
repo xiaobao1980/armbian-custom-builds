@@ -1,0 +1,39 @@
+From: xiaobao <xiaobao@local>
+Subject: [PATCH] ASoC: rockchip: sai: fix default SAI_PATH_SEL to lane0->SDO2
+
+Neardi LK3576 (RK3576) ES8323 codec is physically wired to the
+sai1m0_sdo2 pin. The upstream reg_default for SAI_PATH_SEL is 0x0000e4e4,
+which routes transmit lane0 to SDO0 — where no codec is connected — so
+3.5mm playback is silent.
+
+The RK3576 hardware reset default of SAI_PATH_SEL is 0x0000e4e6
+(lane0 -> SDO2), which is exactly the routing used by the working
+Android 14 BSP DT (it does not set rockchip,sai-tx-route at all and
+relies on the silicon default). Align the reg_default with the hardware
+reset value so the codec receives I2S data without requiring an explicit
+sai-tx-route in every board DT.
+
+Verification on LZ200: with this default, /sys/kernel/debug/regmap/
+2a610000.sai/registers offset 0x38 reads 0x0000e4e6 and 1kHz playback
+reaches the 3.5mm jack.
+
+Signed-off-by: xiaobao <xiaobao@local>
+---
+ sound/soc/rockchip/rockchip_sai.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sound/soc/rockchip/rockchip_sai.c b/sound/soc/rockchip/rockchip_sai.c
+index 1111111..2222222 100644
+--- a/sound/soc/rockchip/rockchip_sai.c
++++ b/sound/soc/rockchip/rockchip_sai.c
+@@ -1345,7 +1345,7 @@ static const struct reg_default rockchip_sai_reg_defaults[] = {
+ 	{ SAI_TXCR, 0x00000bff },
+ 	{ SAI_FSCR, 0x0001f03f },
+ 	{ SAI_RXCR, 0x00000bff },
+-	{ SAI_PATH_SEL, 0x0000e4e4 },
++	{ SAI_PATH_SEL, 0x0000e4e6 },
+ };
+ 
+ static const struct regmap_config rockchip_sai_regmap_config = {
+-- 
+2.39.2

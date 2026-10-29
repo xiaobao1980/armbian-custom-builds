@@ -1,0 +1,14 @@
+[Unit]
+Description=LZ200 USB3 SuperSpeed port flapping workaround
+Documentation=file:/usr/local/bin/lz200-usb3-quirk.sh
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# 等 USB 枚举稳定后再判定
+ExecStartPre=/bin/sleep 20
+ExecStart=/usr/local/bin/lz200-usb3-quirk.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

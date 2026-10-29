@@ -1,0 +1,22 @@
+[Unit]
+Description=Neardi LZ200 WiFi/BT (SKW6316 SeekWave) module loader
+Documentation=https://wiki.neardi.net
+DefaultDependencies=no
+After=systemd-modules-load.service local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 干净加载：模块须与运行内核 vermagic 一致（6.1.172-vendor-rk35xx）。
+# 若 modprobe 失败，说明 /lib/modules 与内核 Image 不同源 —— 故意不回退
+# 强制 -f，以免静默加载符号不匹配的模块导致不稳定。
+ExecStart=/bin/sh -c 'modprobe skw_sdio_v20'
+ExecStart=/bin/sh -c 'modprobe skw6316'
+ExecStart=/bin/sh -c 'modprobe skwbt'
+# 部分固件需要解阻塞 rfkill
+ExecStart=-/usr/sbin/rfkill unblock all
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Neardi LZ200 audio fix (ES8323 3.5mm 无声: 打开 hp/spk 输出开关)
+# 必须最后跑：alsa-restore.service 会在我们之后把 asound.state(默认 off) 重新 apply，
+# 覆盖我们设的 ON。After=alsa-restore.service 确保本服务赢过竞态；脚本内再 alsactl store 固化。
+After=sound.target alsa-restore.service
+Wants=sound.target alsa-restore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/neardi-lz200-audio-fix.sh start
+ExecStop=/usr/local/bin/neardi-lz200-audio-fix.sh stop
+
+[Install]
+WantedBy=multi-user.target

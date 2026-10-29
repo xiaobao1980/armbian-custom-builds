@@ -1,0 +1,80 @@
+From: xiaobao <xiaobao@local>
+Subject: [PATCH] es8323: make OUT1/OUT2 output path always-connected (break DAPM deadlock)
+
+On the Neardi LZ200 (RK3576) board the es8323 codec's "OUT1"/"OUT2" widgets
+are SND_SOC_DAPM_SWITCH with a virtual (SND_SOC_NOPM) "Switch" kcontrol that
+defaults OFF. This disconnects the Mixer -> LOUT1/ROUT1 -> Headphone path,
+so DAPM never powers the upstream DAC/Out PGAs during playback -> DACPOWER
+stuck at 0xc0 -> no analog output on the 3.5mm jack.
+
+Because the switch is virtual and defaults off, DAPM cannot reach a complete
+active path, so the DAC is never powered and the switch can never be turned
+on -> deadlock. Fix by making OUT1/OUT2 always-connected PGAs (no gate), so
+the playback path is complete and DAPM powers DAC + OUT1/OUT2 during playback.
+
+The two SOC_DAPM_SINGLE kcontrols (es8323_out1_switch / es8323_out2_switch)
+become unreferenced with this change, so drop them to avoid
+-Wunused-const-variable warnings.
+
+This pairs with 0007 (es8323 DAC widget stream name -> "Playback").
+
+Note: regenerated against linux-rockchip rk-6.1-rkr7.2 (commit 85233a85) --
+the previous hand-written version had malformed hunk headers (declared 8/15
+lines where the hunks actually had 7/12) and bare blank context lines, so
+`patch` rejected it with "malformed patch at line 35".
+
+---
+ sound/soc/codecs/es8323.c | 18 ++++++------------
+ 1 file changed, 6 insertions(+), 12 deletions(-)
+
+diff --git a/sound/soc/codecs/es8323.c b/sound/soc/codecs/es8323.c
+--- a/sound/soc/codecs/es8323.c
++++ b/sound/soc/codecs/es8323.c
+@@ -237,12 +237,6 @@
+ 	SOC_DAPM_SINGLE("Right Bypass Switch", ES8323_DACCONTROL20, 6, 1, 0),
+ };
+ 
+-static const struct snd_kcontrol_new es8323_out1_switch =
+-	SOC_DAPM_SINGLE("Switch", SND_SOC_NOPM, 0, 1, 0);
+-
+-static const struct snd_kcontrol_new es8323_out2_switch =
+-	SOC_DAPM_SINGLE("Switch", SND_SOC_NOPM, 0, 1, 0);
+-
+ static const struct snd_soc_dapm_widget es8323_dapm_widgets[] = {
+ 	SND_SOC_DAPM_INPUT("LINPUT1"),
+ 	SND_SOC_DAPM_INPUT("LINPUT2"),
+@@ -292,8 +286,8 @@
+ 	SND_SOC_DAPM_PGA("LAMP", ES8323_ADCCONTROL1, 4, 0, NULL, 0),
+ 	SND_SOC_DAPM_PGA("RAMP", ES8323_ADCCONTROL1, 0, 0, NULL, 0),
+ 
+-	SND_SOC_DAPM_SWITCH("OUT1", SND_SOC_NOPM, 0, 0, &es8323_out1_switch),
+-	SND_SOC_DAPM_SWITCH("OUT2", SND_SOC_NOPM, 0, 0, &es8323_out2_switch),
++	SND_SOC_DAPM_PGA("OUT1", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_PGA("OUT2", SND_SOC_NOPM, 0, 0, NULL, 0),
+ 	SND_SOC_DAPM_OUTPUT("LOUT1"),
+ 	SND_SOC_DAPM_OUTPUT("ROUT1"),
+ 	SND_SOC_DAPM_OUTPUT("LOUT2"),
+@@ -349,19 +343,19 @@
+ 	{"Right Mixer", "Right Bypass Switch", "Right Line Mux"},
+ 
+ 	{"Left Out 1", NULL, "Left Mixer"},
+-	{"OUT1", "Switch", "Left Out 1"},
++	{"OUT1", NULL, "Left Out 1"},
+ 	{"LOUT1", NULL, "OUT1"},
+ 
+ 	{"Right Out 1", NULL, "Right Mixer"},
+-	{"OUT1", "Switch", "Right Out 1"},
++	{"OUT1", NULL, "Right Out 1"},
+ 	{"ROUT1", NULL, "OUT1"},
+ 
+ 	{"Left Out 2", NULL, "Left Mixer"},
+-	{"OUT2", "Switch", "Left Out 2"},
++	{"OUT2", NULL, "Left Out 2"},
+ 	{"LOUT2", NULL, "OUT2"},
+ 
+ 	{"Right Out 2", NULL, "Right Mixer"},
+-	{"OUT2", "Switch", "Right Out 2"},
++	{"OUT2", NULL, "Right Out 2"},
+ 	{"ROUT2", NULL, "OUT2"},
+ };
+ 

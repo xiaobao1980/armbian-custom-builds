@@ -12,6 +12,7 @@ BOOT_SCENARIO="spl-blobs"
 IMAGE_PARTITION_TABLE="gpt"
 LINUXCONFIG='linux-neardi-lz200-rk3576'
 BOARD_MAINTAINER=""
+INTRODUCED="2026"
 
 
 # Additional kernel packages - 添加蓝牙支持包
@@ -55,25 +56,26 @@ EOF
 
     # Create Bluetooth systemd service for FD7352S initialization
     mkdir -p $SDCARD/etc/systemd/system/
+    # NOTE: FD7352S is a SeekWave SDIO combo chip. Bluetooth is NOT a UART
+    # HCI device (no hciattach/btattach). The SDIO HAL (skw_sdio_v20) creates
+    # the "btseekwave" platform device during its SDIO probe; loading skwbt
+    # binds to it, downloads sv6316.nvbin and registers hci0.
     cat > $SDCARD/etc/systemd/system/fd7352s-bluetooth.service << 'EOF'
 [Unit]
-Description=FD7352S Bluetooth Initialization
-After=bluetooth.target systemd-udev-settle.service
-Wants=bluetooth.target
+Description=FD7352S SeekWave Bluetooth (SDIO combo) bring-up
+After=systemd-modules-load.service
 Before=bluetooth.service
+Wants=systemd-modules-load.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Wait for UART to be ready
-ExecStartPre=/bin/sleep 2
-# Initialize Bluetooth via hciattach (adjust tty device as needed)
-ExecStart=/usr/bin/hciattach -n -s 115200 /dev/ttyS4 any 115200 flow
-# Or if using btattach for newer kernels:
-# ExecStart=/usr/bin/btattach -B /dev/ttyS4 -P h4 -S 115200 &
-ExecStop=/bin/kill -TERM $MAINPID
-Restart=on-failure
-RestartSec=3
+# Ensure the SDIO HAL is loaded first (it creates the "btseekwave" platform device)
+ExecStartPre=/sbin/modprobe skw_sdio_v20
+# Load the BT sub-driver; its probe downloads sv6316.nvbin and registers hci0
+ExecStart=/sbin/modprobe skwbt
+# Wait for the HCI device to appear after firmware download (async)
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do [ -d /sys/class/bluetooth/hci0 ] && break; sleep 1; done'
 
 [Install]
 WantedBy=multi-user.target
@@ -388,21 +390,5 @@ function post_family_tweaks__neardi_lz200_cmdline() {
         sed -i 's/append /append btusb.enable_autosuspend=0 bluetooth.disable_ertm=1 /' $SDCARD/boot/extlinux/extlinux.conf
     fi
     
-    return 0
-}
-
-# CMA 512M：rk35xx vendor 6.1 默认 CMA 仅 16MB（或 family 设的小值），
-# 4K60 VPU 解码缓冲池 / NPU 需要 ≥512M 连续内存；8GB+ 板风险低。
-function post_family_tweaks__neardi_lz200_cma_reserve() {
-    display_alert "$BOARD" "Bumping CMA to 512M for 4K VPU + NPU" "info"
-    local env="${SDCARD}/boot/armbianEnv.txt"
-    [[ -f "$env" ]] || { display_alert "$BOARD" "armbianEnv.txt not found; CMA fix skipped" "wrn"; return 0; }
-    # 幂等：已写 cma=512M 则跳过，避免重编重复追加
-    grep -q 'extraboardargs=.*cma=512M' "$env" && { display_alert "$BOARD" "CMA 512M already set; skip" "info"; return 0; }
-    if grep -q 'cma=' "$env"; then
-        sed -i -E 's/^extraboardargs=(.*)$/extraboardargs=\1 cma=512M/' "$env"
-    else
-        echo 'extraboardargs=cma=512M' >> "$env"
-    fi
     return 0
 }
