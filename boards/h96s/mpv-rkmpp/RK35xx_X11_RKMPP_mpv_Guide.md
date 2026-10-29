@@ -343,3 +343,80 @@ mpv --hwdec=rkmpp --gpu-context=drm \
   1. **推荐（本指南）**：自己编译官方 mpv，编译期 `PKG_CONFIG_PATH` 指向 ffmpeg-rockchip → 干净、可复现。
   2. 不推荐：用 `LD_LIBRARY_PATH` wrapper 让 apt mpv 指向 ffmpeg-rockchip —— 仅当 apt mpv 版本足够新（含 rkmpp 后端）时才可能生效，且易因版本漂移/符号冲突翻车。
 - 结论：**wrapper 换库对"旧版 apt mpv"无效；编译官方 mpv + 链 ffmpeg-rockchip 才是正路。**
+
+---
+
+## 十四、跨发行版 / 跨架构：必须重编 + 重打包（v3.5）
+
+### 14.1 为什么不能复用现成的 `rkmpp-stack_*.deb`
+
+`rkmpp-stack_0.41.0-1_arm64.deb` 是**发行版 + 架构双重绑定**的产物，不是通用包：
+
+| 绑定项 | 原因 |
+|---|---|
+| 架构（arm64） | 二进制由该架构的 gcc 编译、glibc 链接；armhf/其它架构无法复用 |
+| 发行版（trixie） | `Depends` 由 `dpkg-shlibdeps` **从编译机当前系统的 SONAME 现场算出**：`libplacebo349`、`libx264-164`、`libx265-215`、`libdav1d7`、`libc6 (>= 2.38)` 等。换发行版这些名字就变 |
+| glibc | 二进制要求运行系统 glibc ≥ 编译机；bookworm（2.36）直接装不上 `libc6>=2.38` |
+
+因此：**换发行版 → 必须重编；换架构 → 必须重编。** 不存在"拿 trixie 包塞进 noble/bookworm"的捷径。
+
+### 14.2 哪些平台能编
+
+- **架构**：仅 `arm64`（RK3288 是 32 位 ARMv7，不在本栈范围）。
+- **SoC**：RK3566 / RK3568 / RK3576 / RK3588（vendor BSP 内核，需有 `/dev/mpp_service`、`/dev/rga`）。
+- **发行版**：trixie ✅ / noble ✅ / deepin25 ✅（同源 trixie 时）/ bookworm、jammy ⚠️ —— 后两者自带 `libplacebo` < 6.338.2，mpv 0.41 硬依赖不满足，需先自编 libplacebo 或改用 trixie/noble。
+- **桌面**：X11（Wayland 不适用）。
+
+### 14.3 在目标板重编 + 重打包（一条命令）
+
+```bash
+# 编译 + 安装 + 自动重打「当前发行版/架构」的 deb
+sudo BUILD_DEB=yes bash rk35xx-rkmpp-mpv-build.sh build
+# 产物（默认）：/home/xiaobao/rkmpp-build/debs/rkmpp-stack_0.41.0-1_<arch>.deb
+
+# 若栈已装好，只想重打包（如重刷发行版后）
+sudo bash mkdeb-rkmpp-stack.sh --outdir /root/debs
+
+# 或走 pack 子命令
+sudo OUTDIR=/root/debs bash rk35xx-rkmpp-mpv-build.sh pack
+```
+
+`mkdeb-rkmpp-stack.sh` 会：按 `dpkg --print-architecture` 定架构、按 `dpkg-architecture` 定 multiarch 目录（`/usr/local/lib/<triple>/`）、用 `dpkg-shlibdeps --ignore-missing-info` 现算 Depends、写 `postinst`（ldconfig + udev 重载），并在包里落地构建标记。
+
+### 14.4 构建标记与"错包拦截"
+
+重编/重打后，包里会多一个 `/usr/local/share/rkmpp-stack/build-info`：
+
+```
+ARCH=arm64
+MULTIARCH=aarch64-linux-gnu
+DISTRO_CODENAME=trixie
+GLIBC=2.41
+MPV=0.41.0
+MPP=1.3.9
+RGA=2.1.0
+```
+
+`rkmpp-mpv.sh` 扩展在安装预编译包前会读它，与目标 `ARCH`/`RELEASE` 比对；**不一致就丢弃该 deb、自动转源码编译**，不会把 trixie 包硬装到 noble 上。旧包（无 build-info）按 trixie 处理。
+
+### 14.5 发布到其它平台的预编译包
+
+```bash
+# 在新平台板子上重编并打包后取出
+scp xiaobao@<board>:/root/debs/rkmpp-stack_0.41.0-1_arm64.deb .
+
+# 以带发行版/架构信息的新 tag 上传（示例）
+gh release create rkmpp-stack-v0.41.0-noble-arm64 \
+  rkmpp-stack_0.41.0-1_arm64.deb --repo <owner>/armbian-custom-builds
+```
+
+CI 的"预拉预编译包"步骤按 tag 拉取；换平台就把 tag 指向对应产物即可。
+
+### 14.6 验收
+
+```bash
+dpkg-deb -f <deb> Architecture
+dpkg-deb --fsys-tarfile <deb> | tar -xO ./usr/local/share/rkmpp-stack/build-info
+sudo bash verify-rkmpp-image.sh /path/to/4k.mp4   # 期望 PASS=11 FAIL=0
+```
+

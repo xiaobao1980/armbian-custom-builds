@@ -16,7 +16,13 @@
 # 注意 : 本板 github 被网络层封锁，mpv 源码 + 补丁需提前从可访问 github 的主机
 #        放到 MPV_TARBALL / MPV_PATCH 指向的路径（默认 /home/xiaobao/rkmpp-src/）。
 #        若 tarball 不存在，脚本会尝试 gitee 镜像作为兜底。
-# 用法 : sudo bash rk35xx-rkmpp-mpv-build.sh [build|uninstall]
+# 用法 : sudo bash rk35xx-rkmpp-mpv-build.sh [build|uninstall|pack]
+#         build     编译并安装；BUILD_DEB=yes 时顺带打包当前发行版/架构的 .deb
+#         pack      仅打包（把已安装的栈打成 deb；跨发行版/跨架构重编后发布用）
+#         uninstall 卸载本栈
+# 注意 : 生成的 rkmpp-stack_*.deb 绑定「当前发行版 + 当前架构」（Depends 由
+#        dpkg-shlibdeps 从本机 SONAME 算出）。换发行版或换架构必须在本机重编重打，
+#        不能复用他处产物。
 # =============================================================================
 set -euo pipefail
 
@@ -140,6 +146,8 @@ do_uninstall() {
   rm -f /etc/udev/rules.d/99-mpp.rules 2>/dev/null || true
   rm -f /etc/mpv/mpv.conf /usr/local/etc/mpv/mpv.conf 2>/dev/null || true
   rmdir /etc/mpv /usr/local/etc/mpv 2>/dev/null || true
+  # 构建标记（跨发行版/架构重编的判断依据）
+  rm -rf /usr/local/share/rkmpp-stack 2>/dev/null || true
   ldconfig
   log "== 卸载完成 =="
 }
@@ -431,6 +439,47 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# 写构建标记：记录本栈是用哪个发行版 / 架构 / glibc 编的
+# 背景：rkmpp-stack.deb 的 Depends 由 dpkg-shlibdeps 从当前系统 SONAME 算出，
+#       二进制也由当前发行版 glibc 链接 —— 所以跨发行版、跨架构都无法复用，
+#       必须在本机重编。此标记既供人查，也供 rkmpp-mpv 扩展判断预编译包是否适用。
+# -----------------------------------------------------------------------------
+write_build_info() {
+  local d=/usr/local/share/rkmpp-stack
+  mkdir -p "$d"
+  local mlib; mlib="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo "$(dpkg --print-architecture)-linux-gnu")"
+  . /etc/os-release 2>/dev/null || true
+  cat > "$d/build-info" <<EOF
+PKG=rkmpp-stack
+ARCH=$(dpkg --print-architecture)
+MULTIARCH=$mlib
+DISTRO_ID=${ID:-unknown}
+DISTRO_CODENAME=${VERSION_CODENAME:-${UBUNTU_CODENAME:-unknown}}
+GLIBC=$(ldd --version 2>/dev/null | head -1 | awk '{print $NF}')
+MPV=$(/usr/local/bin/mpv --version 2>/dev/null | head -1 | awk '{print $2}')
+MPP=$(pkg-config --modversion rockchip_mpp 2>/dev/null || echo unknown)
+RGA=$(pkg-config --modversion librga 2>/dev/null || echo unknown)
+FFMPEG=$(/usr/local/bin/ffmpeg -hide_banner -version 2>/dev/null | head -1 | awk '{print $3}')
+BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+BUILT_ON=$(hostname 2>/dev/null || echo unknown)
+EOF
+  log "构建标记: $(grep -E '^(ARCH|DISTRO_CODENAME|GLIBC)=' "$d/build-info" | tr '\n' ' ')"
+}
+
+# -----------------------------------------------------------------------------
+# 打包成「当前发行版 + 当前架构」的 .deb（跨发行版/跨架构重编后的分发件）
+# -----------------------------------------------------------------------------
+do_pack() {
+  local here mk
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  mk="$here/mkdeb-rkmpp-stack.sh"
+  [ -f "$mk" ] || { log "错误: 找不到 $mk（打包脚本应与本脚本同目录）"; exit 1; }
+  local od="${OUTDIR:-$BUILD_BASE/debs}"
+  log "== 打包 deb → $od =="
+  bash "$mk" --outdir "$od"
+}
+
+# -----------------------------------------------------------------------------
 # 验证
 # -----------------------------------------------------------------------------
 verify() {
@@ -454,6 +503,10 @@ case "${1:-build}" in
     do_uninstall
     exit 0
     ;;
+  pack)
+    do_pack
+    exit 0
+    ;;
   build|"")
     log "######## RK35xx RKMPP+mpv 一键编译开始 ########"
     detect_distro
@@ -466,11 +519,18 @@ case "${1:-build}" in
     prepare_mpv
     build_mpv
     configure_runtime
+    write_build_info
     verify
+    if [ "${BUILD_DEB:-no}" = "yes" ]; then
+      do_pack
+    fi
     log "######## 完成。如需 4K 满帧请 reboot 使 cma=512M 生效 ########"
     ;;
   *)
-    echo "用法: $0 [build|uninstall]"
+    echo "用法: $0 [build|uninstall|pack]"
+    echo "  build     编译并安装（BUILD_DEB=yes 时顺带打包 deb）"
+    echo "  pack      仅把已安装的栈打包成当前发行版/架构的 .deb（OUTDIR 可指定输出目录）"
+    echo "  uninstall 卸载本栈"
     exit 1
     ;;
 esac

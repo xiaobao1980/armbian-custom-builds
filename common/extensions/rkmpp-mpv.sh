@@ -27,13 +27,17 @@
 #    assets/rkmpp-mpv/rk35xx-rkmpp-mpv-build.sh  —— v3 一键编译脚本
 #    assets/rkmpp-mpv/mpp.patch                  —— rkmpp 后端补丁
 #    assets/rkmpp-mpv/verify-rkmpp-image.sh      —— 烧卡后一键校验脚本
+#    assets/rkmpp-mpv/mkdeb-rkmpp-stack.sh       —— deb 打包器（跨发行版/跨架构重编用）
 #    assets/rkmpp-mpv/prebuilt/*.deb             —— 预编译栈（CI 用，非必需）
 #
-#  两条安装路径（v3.4）：
+#  两条安装路径（v3.5）：
 #    A. 预编译 deb（默认）: CI 6h 上限装不下 qemu 源码编译，秒级安装 + apt 自动补运行库。
 #       由 workflow 用 `gh release download` 放到 assets/prebuilt/ 下。
-#    B. 源码编译（回退）: RKMPP_MPV_PREBUILT=no，或 deb 缺失/校验失败时触发。
-#       板上（8 核原生）走这条，全程约 20-45 分钟。
+#       **仅当包的 build-info 与目标 ARCH/发行版一致才使用**（跨发行版/跨架构必须重编，
+#       不符即自动转 B，避免在 noble/bookworm 上装 trixie 包导致依赖爆炸）。
+#    B. 源码编译（回退）: RKMPP_MPV_PREBUILT=no，或 deb 缺失/校验失败/发行版架构不符时触发。
+#       板上（8 核原生）走这条，全程约 20-45 分钟。重编后可 RKMPP_MPV_PACK_DEB=yes
+#       让脚本按当前发行版/架构重打 deb（/root/debs/），用于发布新平台的预编译包。
 #
 #  生效条件（全局, 所有 vendor 内核 Rockchip 板）:
 #    * BRANCH=vendor 且 LINUXFAMILY=rk35xx / rockchip-rk3588（BSP 内核带 rkmpp 驱动）
@@ -93,6 +97,11 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	cp "${ASSET_DIR}/rk35xx-rkmpp-mpv-build.sh" "${SDCARD}/usr/local/sbin/rk35xx-rkmpp-mpv-build.sh"
 	cp "${ASSET_DIR}/mpp.patch" "${SDCARD}/root/rkmpp-src/mpp.patch"
 	chmod +x "${SDCARD}/usr/local/sbin/rk35xx-rkmpp-mpv-build.sh"
+	# 打包器：把已安装栈打成「当前发行版/架构」的 deb（跨发行版/跨架构重编后发布用）
+	if [[ -f "${ASSET_DIR}/mkdeb-rkmpp-stack.sh" ]]; then
+		cp "${ASSET_DIR}/mkdeb-rkmpp-stack.sh" "${SDCARD}/usr/local/sbin/mkdeb-rkmpp-stack.sh"
+		chmod +x "${SDCARD}/usr/local/sbin/mkdeb-rkmpp-stack.sh"
+	fi
 	# 烧卡后一键校验脚本（可选资产，缺失不影响构建）
 	if [[ -f "${ASSET_DIR}/verify-rkmpp-image.sh" ]]; then
 		cp "${ASSET_DIR}/verify-rkmpp-image.sh" "${SDCARD}/usr/local/sbin/verify-rkmpp-image.sh"
@@ -119,7 +128,29 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	#   安装耗时秒级；源码编译回退路径保留（RKMPP_MPV_PREBUILT=no 或包缺失/校验失败时）。
 	local PREBUILT_DIR="${ASSET_DIR}/prebuilt"
 	local DEB="" PREBUILT_OK=0
-	DEB="$(ls -1 "${PREBUILT_DIR}"/rkmpp-stack_*_arm64.deb 2>/dev/null | head -1)"
+	# 只找与目标架构同名的预编译包；找不到（如换架构）即走源码编译
+	DEB="$(ls -1 "${PREBUILT_DIR}"/rkmpp-stack_*_"${ARCH:-arm64}".deb 2>/dev/null | head -1)"
+
+	# ---- 2.5a 发行版/架构守卫：预编译包只对「编译它的发行版+架构」有效 ----
+	# rkmpp-stack.deb 的 Depends 由 dpkg-shlibdeps 从编译机 SONAME 算出，二进制也
+	# 由编译机 glibc 链接。换发行版（trixie→noble/bookworm/deepin）或换架构都不能复用，
+	# 必须在本机重编。包里 /usr/local/share/rkmpp-stack/build-info 记录了构建时的
+	# ARCH / DISTRO_CODENAME；旧包（无该文件）按 trixie 处理（它就是在 trixie 上编的）。
+	if [[ -n "${DEB}" ]]; then
+		local _deb_arch _deb_distro _tgt_arch _tgt_distro
+		_tgt_arch="${ARCH:-arm64}"
+		_tgt_distro="${RELEASE:-unknown}"
+		_deb_arch="$(dpkg-deb -f "${DEB}" Architecture 2>/dev/null || echo unknown)"
+		_deb_distro="$(dpkg-deb --fsys-tarfile "${DEB}" 2>/dev/null \
+			| tar -xO ./usr/local/share/rkmpp-stack/build-info 2>/dev/null \
+			| sed -n 's/^DISTRO_CODENAME=//p' | head -1)"
+		[[ -n "${_deb_distro}" ]] || _deb_distro="trixie"
+		if [[ "${_deb_arch}" != "${_tgt_arch}" || "${_deb_distro}" != "${_tgt_distro}" ]]; then
+			display_alert "预编译包为 ${_deb_arch}/${_deb_distro}，目标为 ${_tgt_arch}/${_tgt_distro}：跨发行版/跨架构必须重编，转为源码编译" "${EXTENSION}" "warn"
+			DEB=""
+		fi
+	fi
+
 	if [[ -n "${DEB}" && "${RKMPP_MPV_PREBUILT:-yes}" == "yes" ]]; then
 		display_alert "Installing prebuilt rkmpp-stack deb: $(basename "${DEB}")" "${EXTENSION}" "info"
 		cp "${DEB}" "${SDCARD}/root/rkmpp-src/"
@@ -159,8 +190,18 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	else
 		display_alert "Skipping rkmpp source build (RKMPP_MPV_SKIP_BUILD=yes)" "${EXTENSION}" "warn"
 	fi
-	# 构建脚本仅用于镜像内一次性编译，编译完即删，避免残留在最终镜像
-	rm -f "${SDCARD}/usr/local/sbin/rk35xx-rkmpp-mpv-build.sh"
+
+	# ---- 3.5 可选：重编后按「当前发行版/架构」重打 deb（跨发行版/跨架构发布用，默认关）----
+	# 开启后产物落在镜像 /root/debs/，可取出上传为新架构/新发行版的预编译包。
+	if [[ "${RKMPP_MPV_PACK_DEB:-no}" == "yes" ]]; then
+		display_alert "Repacking deb for ${RELEASE}/${ARCH}" "${EXTENSION}" "info"
+		chroot_sdcard "env OUTDIR=/root/debs bash /usr/local/sbin/mkdeb-rkmpp-stack.sh" \
+			|| display_alert "repack failed (image still valid, deb not produced)" "${EXTENSION}" "warn"
+	fi
+
+	# 构建/打包脚本仅用于镜像内一次性使用，用完即删，避免残留在最终镜像
+	rm -f "${SDCARD}/usr/local/sbin/rk35xx-rkmpp-mpv-build.sh" \
+	      "${SDCARD}/usr/local/sbin/mkdeb-rkmpp-stack.sh"
 
 	# ---- 4. 安全网：确保 CMA=512M 写入 armbianEnv.txt（旧扩展缺失此项 → 4K 掉帧）----
 	# v3 脚本已在 chroot 内写 /boot/armbianEnv.txt；此处兜底（防 boot 分区未挂载时序）。

@@ -357,3 +357,14 @@ audio-buffer=1.0
 # 或禁用音频同步（仅测试）
 # no-audio-sync
 ```
+
+---
+
+## 附二：跨发行版 / 跨架构（v3.5 起）
+
+本文（方案 A wrapper 路线）已不是推荐路径。**推荐用官方 mpv + rkmpp 补丁的 v3 栈**，
+且 `rkmpp-stack_*.deb` 绑定「编译它时的发行版 + 架构」，**换发行版/换架构必须在本机重编重打**，
+不能复用别处的包。详见：
+
+- `boards/h96s/mpv-rkmpp/RK35xx_X11_RKMPP_mpv_Guide.md` → 「十四、跨发行版 / 跨架构」
+- 工具：`common/extensions/rkmpp-mpv/mkdeb-rkmpp-stack.sh`（架构/发行版自适应打包器）
