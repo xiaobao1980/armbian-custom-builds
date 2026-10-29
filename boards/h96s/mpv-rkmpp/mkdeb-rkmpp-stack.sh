@@ -66,8 +66,21 @@ MPV_BASE="${MPV_RAW%%-*}"                      # v0.41.0-dirty -> v0.41.0
 MPV_BASE="${MPV_BASE#v}"                       # -> 0.41.0（dpkg 版本号不能以 v 开头）
 VERSION="${VERSION_OVERRIDE:-${MPV_BASE:-0.41.0}-1}"
 PKGCFG="$(command -v pkg-config 2>/dev/null || command -v pkgconf 2>/dev/null || true)"
-MPP_VER="$([ -n "$PKGCFG" ] && "$PKGCFG" --modversion rockchip_mpp 2>/dev/null || echo unknown)"
-RGA_VER="$([ -n "$PKGCFG" ] && "$PKGCFG" --modversion librga 2>/dev/null || echo unknown)"
+# 发行版镜像常把 pkg-config 裁掉（106 板即是），此时退回直接读 .pc 里的 Version: 行，
+# 避免 build-info 里 MPP/RGA 记成 unknown（运维排障时这行是最常用的对照依据）。
+pc_ver() {
+  local name="$1" f
+  if [ -n "$PKGCFG" ]; then
+    local v; v="$("$PKGCFG" --modversion "$name" 2>/dev/null)" && [ -n "$v" ] && { echo "$v"; return; }
+  fi
+  for f in "$PREFIX/lib/pkgconfig/$name.pc" "$PREFIX/lib/$MULTIARCH/pkgconfig/$name.pc"; do
+    [ -f "$f" ] || continue
+    sed -n 's/^[Vv]ersion:[[:space:]]*//p' "$f" | sed -n 1p && return
+  done
+  echo unknown
+}
+MPP_VER="$(pc_ver rockchip_mpp)"
+RGA_VER="$(pc_ver librga)"
 FFMPEG_VER="$("$PREFIX/bin/ffmpeg" -hide_banner -version 2>/dev/null | sed -n 1p | awk '{print $3}')"
 
 log "目标: $PKG $VERSION  arch=$ARCH multiarch=$MULTIARCH  distro=$DISTRO_CODENAME($DISTRO_ID) glibc=$GLIBC"

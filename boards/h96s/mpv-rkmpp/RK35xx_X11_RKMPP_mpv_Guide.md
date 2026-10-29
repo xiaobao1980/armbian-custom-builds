@@ -466,20 +466,32 @@ RGA=2.1.0
 
 ```bash
 # 在新平台板子上重编并打包后取出
-scp xiaobao@<board>:/root/debs/rkmpp-stack_0.41.0-1_arm64.deb .
+scp xiaobao@<board>:/root/debs/rkmpp-stack_0.41.0-2_arm64.deb .
 
 # 以带发行版/架构信息的新 tag 上传（示例）
 gh release create rkmpp-stack-v0.41.0-noble-arm64 \
-  rkmpp-stack_0.41.0-1_arm64.deb --repo <owner>/armbian-custom-builds
+  rkmpp-stack_0.41.0-2_arm64.deb --repo <owner>/armbian-custom-builds
 ```
 
-CI 的"预拉预编译包"步骤按 tag 拉取；换平台就把 tag 指向对应产物即可。
+CI 的"预拉预编译包"步骤按 tag 拉取（当前按 `rkmpp-stack-v0.41.0-2` → `-1` 顺序回退，
+见 `.github/workflows/build-image.yml`）；换平台就改 tag 列表，指向对应产物。
+
+**当前已发布**：
+
+| tag | 版本 | 适用 | 说明 |
+|---|---|---|---|
+| `rkmpp-stack-v0.41.0-2` | 0.41.0-2 | arm64 / trixie / X11 | 含桌面菜单项 + `rkmpp-mpv.svg` + postinst 强制重建图标缓存 + build-info + rga udev 行 |
+| `rkmpp-stack-v0.41.0-1` | 0.41.0-1 | arm64 / trixie / X11 | 旧包，无桌面集成（菜单里搜不到 mpv），仅作回退 |
+
+`0.41.0-2` 实测 sha256 `4e3c262ecdb25381a9d209fab8a066b2d8d4ccfb4b15c86e0909128e1787d75a`，
+11,251,200 B，77 条目。若 `build-info` 里 `MPP/RGA` 显示 `unknown`，说明该镜像没有
+`pkg-config`（v3.8 起会自动回退解析 `.pc` 的 `Version:` 行）。
 
 ### 14.6 验收
 
 ```bash
 dpkg-deb -f <deb> Architecture
 dpkg-deb --fsys-tarfile <deb> | tar -xO ./usr/local/share/rkmpp-stack/build-info
-sudo bash verify-rkmpp-image.sh /path/to/4k.mp4   # 期望 PASS=11 FAIL=0
+sudo bash verify-rkmpp-image.sh /path/to/4k.mp4   # 期望 PASS=14 FAIL=0（含桌面段）
 ```
 

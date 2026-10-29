@@ -181,10 +181,17 @@ jobs:
           D="armbian-build/userpatches/extensions/rkmpp-mpv/prebuilt"
           mkdir -p "$D"
           if command -v gh >/dev/null 2>&1; then
-            if gh release download rkmpp-stack-v0.41.0-1 --repo "$GH_REPO" \
-                 --pattern 'rkmpp-stack_*_arm64.deb' --dir "$D"; then
-              echo "预编译包已就位:"; ls -lh "$D"
-            else
+            # 优先 -2（含桌面菜单项 mpv-desktop / rkmpp-mpv.svg + postinst 强制重建图标缓存），
+            # 未发布则退回 -1（无桌面集成，装上后菜单里搜不到 mpv）。
+            OK=0
+            for TAG in rkmpp-stack-v0.41.0-2 rkmpp-stack-v0.41.0-1; do
+              if gh release download "$TAG" --repo "$GH_REPO" \
+                   --pattern 'rkmpp-stack_*_arm64.deb' --dir "$D"; then
+                echo "预编译包已就位（$TAG）:"; ls -lh "$D"; OK=1; break
+              fi
+              echo "::notice::$TAG 不可用，尝试下一个 tag"
+            done
+            if [ "$OK" != "1" ]; then
               echo "::warning::预编译包下载失败, rkmpp-mpv 扩展将回退源码编译(可能撞 6h 上限)"
             fi
           else
