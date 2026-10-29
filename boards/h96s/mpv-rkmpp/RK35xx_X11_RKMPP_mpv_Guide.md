@@ -261,8 +261,8 @@ echo 1000 | sudo tee /proc/mpp_service/load_interval
 
 | 文件 | 作用 |
 |---|---|
-| `/usr/share/applications/mpv.desktop` | 菜单项，`Name=mpv` / `Name[zh_CN]=mpv 播放器`，类别 AudioVideo;Video;Player |
-| `/usr/share/icons/hicolor/scalable/apps/mpv.svg` | 菜单图标（`Icon=mpv`；trixie 的 hicolor 里没有现成 mpv 图标） |
+| `/usr/share/applications/mpv.desktop` | 菜单项，`Name=mpv` / `Name[zh_CN]=mpv 播放器`，类别 AudioVideo;Video;Player，`Icon=rkmpp-mpv` |
+| `/usr/share/icons/hicolor/scalable/apps/rkmpp-mpv.svg` | 菜单图标（**独立命名**，见下方「图标有两个坑」） |
 | `/usr/local/bin/mpv-desktop` | 菜单入口 wrapper：**无参时开 idle 窗口**（非全屏、可拖拽文件），带参时按 `mpv.conf` 正常全屏播放 |
 
 为什么需要 wrapper：`mpv` 不带参数会打印用法后立即退出，菜单项直接 `Exec=mpv %U` 点了"像没反应"。
@@ -271,9 +271,35 @@ echo 1000 | sudo tee /proc/mpp_service/load_interval
 
 ```bash
 sudo update-desktop-database /usr/share/applications 2>/dev/null
-sudo gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null
+sudo gtk-update-icon-cache -f /usr/share/icons/hicolor        # 必须 -f，理由见下
+DISPLAY=:0 XAUTHORITY=/home/$USER/.Xauthority xfce4-panel -r  # 让面板重新解析图标
 # 验证菜单项能真正拉起窗口（无参 → idle 窗口常驻）
 DISPLAY=:0 XAUTHORITY=/home/$USER/.Xauthority /usr/local/bin/mpv-desktop   # Ctrl+C/q 退出
+```
+
+### 图标有两个坑（v3.7 实测确认，都会静默失败）
+
+**坑 1：`Icon=mpv` 会被主题自带图标顶掉。**
+发行版主题里可能自带 `mpv.svg`（如 `Numix-Circle/48/apps/mpv.svg`，官方 8bit 小图标），
+主题目录优先级高于 hicolor，于是菜单显示的是主题那个、不是栈自带的。
+→ 栈改用独立名 `Icon=rkmpp-mpv`，任何主题都不会有同名文件，必然落到 hicolor。
+
+**坑 2：`icon-theme.cache` 不重建 = 图标永远不生效，且无任何报错。**
+GTK 只要发现 `/usr/share/icons/hicolor/icon-theme.cache` 存在，就**只按缓存查图标，不重扫目录**。
+新增图标文件后若不重建缓存，`Gtk.IconTheme.lookup_icon("mpv",24)` 直接返回 `NULL`，
+菜单静默回退到主题的通用图标（Numix 下是蓝色 `applications-multimedia` 方块）——
+看起来就像"图标文件没装"，实际文件好好的。
+注意 `-t` 不是"更新"（它是 `--ignore-theme-index`），必须用 **`-f` 强制重建**；没有该工具时删掉旧缓存也行（无缓存 GTK 会直接扫目录）。
+
+自查（这条能直接判死）：
+
+```bash
+python3 - <<'EOF'
+import gi; gi.require_version('Gtk','3.0')
+from gi.repository import Gtk; Gtk.init([])
+i = Gtk.IconTheme.get_default().lookup_icon('rkmpp-mpv', 24, 0)
+print(i.get_filename() if i else 'NULL ← 缓存没重建，或名字被主题覆盖')
+EOF
 ```
 
 想把视频/音频默认打开方式设为 mpv（可选，会写 `/etc/xdg/mimeapps.list`）：

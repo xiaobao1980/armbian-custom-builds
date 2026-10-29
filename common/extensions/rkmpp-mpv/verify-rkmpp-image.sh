@@ -165,9 +165,11 @@ fi
 
 echo "--- 5.5 桌面菜单项（开始菜单/应用查找器里能否搜到 mpv）---"
 DESKTOP_FILE=/usr/share/applications/mpv.desktop
-DESKTOP_ICON=/usr/share/icons/hicolor/scalable/apps/mpv.svg
+DESKTOP_ICON=/usr/share/icons/hicolor/scalable/apps/rkmpp-mpv.svg
+LEGACY_ICON=/usr/share/icons/hicolor/scalable/apps/mpv.svg
 DESK_OK=0
-[ -f "$DESKTOP_FILE" ] && grep -q '^Exec=/usr/local/bin/mpv-desktop' "$DESKTOP_FILE" && DESK_OK=1
+[ -f "$DESKTOP_FILE" ] && grep -q '^Exec=/usr/local/bin/mpv-desktop' "$DESKTOP_FILE" \
+  && grep -q '^Icon=rkmpp-mpv' "$DESKTOP_FILE" && DESK_OK=1
 if [ "$DESK_OK" = "1" ]; then
   ok "菜单项存在且指向 wrapper: $DESKTOP_FILE"
 else
@@ -185,7 +187,7 @@ Comment=RKMPP hardware-accelerated video player
 Comment[zh_CN]=RKMPP 硬件加速视频播放器（RK35xx）
 Exec=/usr/local/bin/mpv-desktop %U
 TryExec=/usr/local/bin/mpv
-Icon=mpv
+Icon=rkmpp-mpv
 Terminal=false
 Categories=AudioVideo;Video;Player;
 MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mp2t;video/x-flv;video/mpeg;audio/mpeg;audio/flac;audio/x-wav;audio/ogg;
@@ -193,7 +195,7 @@ Keywords=mpv;player;video;rkmpp;hardware;
 StartupNotify=false
 DESKEOF
     chmod 644 "$DESKTOP_FILE"
-    ok "菜单项缺失或 Exec 过旧，已写入 wrapper 版本（重开应用菜单即可搜到）"
+    ok "菜单项缺失或 Exec/Icon 过旧，已写入 wrapper 版本（重开应用菜单即可搜到）"
   else
     bad "缺 $DESKTOP_FILE（需 root 创建）"
   fi
@@ -204,13 +206,37 @@ elif [ "$(id -u)" = "0" ]; then
   mkdir -p "$(dirname "$DESKTOP_ICON")"
   printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
     '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">' \
-    '  <rect x="4" y="4" width="120" height="120" rx="22" fill="#7b1fa2"/>' \
-    '  <path d="M50 36 L50 92 L96 64 Z" fill="#ffffff"/>' \
+    '  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">' \
+    '    <stop offset="0" stop-color="#9c27b0"/><stop offset="1" stop-color="#5e1273"/>' \
+    '  </linearGradient></defs>' \
+    '  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#g)"/>' \
+    '  <path d="M52 38 L52 90 L94 64 Z" fill="#ffffff"/>' \
     '</svg>' > "$DESKTOP_ICON"
   chmod 644 "$DESKTOP_ICON"
-  ok "菜单图标缺失，已补（Icon=mpv）"
+  ok "菜单图标缺失，已补（Icon=rkmpp-mpv，独立命名避免被主题自带 mpv.svg 覆盖）"
 else
-  warn "缺 $DESKTOP_ICON —— 菜单项会显示空白图标"
+  warn "缺 $DESKTOP_ICON —— 菜单项会显示主题的通用图标"
+fi
+# 旧版遗留（v3.6 及以前用 mpv.svg，会被 Numix-Circle 等主题自带同名图标顶掉）
+if [ -f "$LEGACY_ICON" ] && [ "$(id -u)" = "0" ]; then
+  rm -f "$LEGACY_ICON"
+  ok "已清理旧图标 mpv.svg（改用 rkmpp-mpv.svg，避免与主题同名图标冲突）"
+fi
+# 图标缓存：GTK 只按 icon-theme.cache 查找，新增图标不重建缓存 = 菜单永远显示通用图标，
+# 且没有任何报错（本栈线上真实踩过）。必须 -f 强制重建。
+ICON_CACHE=/usr/share/icons/hicolor/icon-theme.cache
+if [ "$(id -u)" = "0" ]; then
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null \
+      && ok "图标缓存已强制重建（gtk-update-icon-cache -f）" \
+      || warn "图标缓存重建失败，菜单可能仍显示通用图标"
+  else
+    rm -f "$ICON_CACHE" 2>/dev/null || true
+    ok "系统无 gtk-update-icon-cache，已移除旧缓存（GTK 改为直接扫描目录）"
+  fi
+  command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications 2>/dev/null || true
+else
+  warn "非 root，跳过图标缓存重建（菜单图标不刷新时执行：sudo gtk-update-icon-cache -f /usr/share/icons/hicolor）"
 fi
 WRAP=/usr/local/bin/mpv-desktop
 if [ -x "$WRAP" ]; then
@@ -236,6 +262,33 @@ if [ -f "$DESKTOP_FILE" ]; then
     warn "菜单项 Exec 不是 /usr/local/bin/mpv，可能指向 apt 版 mpv"
   fi
   command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+# 端到端：让 GTK 真正按主题链解析一次 Icon 名（这是"菜单里图标不对"的最终判据）
+if [ "$(id -u)" = "0" ] && command -v python3 >/dev/null 2>&1 && python3 -c 'import gi' >/dev/null 2>&1; then
+  ICON_PY=$(mktemp /tmp/iconprobe.XXXXXX.py)
+  cat > "$ICON_PY" <<'PYEOF'
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk
+Gtk.init([])
+info = Gtk.IconTheme.get_default().lookup_icon('rkmpp-mpv', 24, 0)
+print(info.get_filename() if info else '')
+PYEOF
+  chmod 644 "$ICON_PY"
+  XPU=""
+  for h in /home/*; do [ -f "$h/.Xauthority" ] && { XPU=$(basename "$h"); break; }; done
+  if [ -n "$XPU" ]; then
+    ICON_RES=$(runuser -u "$XPU" -- env DISPLAY="${DISPLAY:-:0}" XAUTHORITY="/home/$XPU/.Xauthority" \
+               python3 "$ICON_PY" 2>/dev/null)
+    case "$ICON_RES" in
+      *rkmpp-mpv.svg) ok "GTK 已能解析菜单图标 → $ICON_RES" ;;
+      "") warn "GTK 解析 Icon=rkmpp-mpv 返回空（缓存未生效？先 gtk-update-icon-cache -f，再 xfce4-panel -r）" ;;
+      *)  warn "GTK 把 Icon 解析到了别的文件：$ICON_RES" ;;
+    esac
+  fi
+  rm -f "$ICON_PY"
+else
+  warn "无 python3-gi 或非 root，跳过 GTK 图标解析校验"
 fi
 
 echo "--- 6. 真实播放测试（可选）---"

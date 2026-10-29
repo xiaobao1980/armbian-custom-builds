@@ -90,7 +90,7 @@ add "$PREFIX"/lib/pkgconfig/*.pc
 add /etc/mpv/mpv.conf /etc/udev/rules.d/99-mpp.rules /etc/ld.so.conf.d/99-ffmpeg-rockchip.conf
 add "$PREFIX/etc/mpv/mpv.conf"          # 软链（若存在）
 add /usr/share/applications/mpv.desktop                        # 桌面菜单项
-add /usr/share/icons/hicolor/scalable/apps/mpv.svg             # 菜单图标
+add /usr/share/icons/hicolor/scalable/apps/rkmpp-mpv.svg       # 菜单图标（独立命名，避免被主题自带 mpv.svg 覆盖）
 add "$PREFIX/bin/mpv-desktop"                                  # 菜单入口 wrapper（无参开 idle 窗口）
 
 [ "${#SRC[@]}" -gt 0 ] || die "未收集到任何文件"
@@ -189,7 +189,8 @@ if [ -d /run/udev ] || [ -d /dev/.udev ]; then
 fi
 # 桌面菜单项刷新（XFCE/GNOME 才能立即搜到 mpv）
 command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications 2>/dev/null || true
-command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t /usr/share/icons/hicolor 2>/dev/null || true
+# 必须 -f 强制重建：GTK 只按 icon-theme.cache 查图标，不重建缓存菜单里永远是通用图标
+command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || rm -f /usr/share/icons/hicolor/icon-theme.cache 2>/dev/null || true
 exit 0
 EOF
 chmod 0755 "$STAGE/DEBIAN/postinst"
@@ -207,7 +208,7 @@ local_n=$(wc -l < "$WORK/deb.list" | tr -d ' ')
 log "    文件条目: $local_n"
 for need in ./usr/local/bin/mpv ./usr/local/bin/ffmpeg ./usr/local/lib/ffmpeg-rkmpp ./etc/mpv/mpv.conf \
             ./usr/local/share/rkmpp-stack/build-info ./usr/share/applications/mpv.desktop \
-            ./usr/share/icons/hicolor/scalable/apps/mpv.svg ./usr/local/bin/mpv-desktop; do
+            ./usr/share/icons/hicolor/scalable/apps/rkmpp-mpv.svg ./usr/local/bin/mpv-desktop; do
   grep -q " $need" "$WORK/deb.list" || die "产物缺少 $need"
 done
 log "    关键路径齐全"

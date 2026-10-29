@@ -148,8 +148,12 @@ do_uninstall() {
   rmdir /etc/mpv /usr/local/etc/mpv 2>/dev/null || true
   # 桌面菜单项与图标
   rm -f /usr/share/applications/mpv.desktop \
+        /usr/share/icons/hicolor/scalable/apps/rkmpp-mpv.svg \
         /usr/share/icons/hicolor/scalable/apps/mpv.svg \
         /usr/local/bin/mpv-desktop 2>/dev/null || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+    gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || \
+    rm -f /usr/share/icons/hicolor/icon-theme.cache 2>/dev/null || true
   # 构建标记（跨发行版/架构重编的判断依据）
   rm -rf /usr/local/share/rkmpp-stack 2>/dev/null || true
   ldconfig
@@ -401,6 +405,20 @@ build_mpv() {
 # -----------------------------------------------------------------------------
 # 桌面集成：.desktop 菜单项 + 图标（缺这两个，XFCE/GNOME 开始菜单里搜不到 mpv）
 # -----------------------------------------------------------------------------
+# 重建图标缓存（关键！）：GTK 只要发现 hicolor 下有 icon-theme.cache，就按缓存查图标，
+# 不会重扫目录。新增一个图标却不重建缓存，菜单里只会显示主题的通用图标
+# （例如 Numix 的 applications-multimedia 蓝方块），且毫无报错 —— 极易误判成"图标没装"。
+# 必须用 -f 强制覆盖；`-t` 只是"忽略缺失 index.theme"，不是"更新"，别混用。
+refresh_icon_cache() {
+  local root="${1:-/usr/share/icons/hicolor}"
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -q "$root" 2>/dev/null && log "图标缓存已重建: $root" && return 0
+  fi
+  # 没有该工具时删掉旧缓存：无缓存 GTK 会直接扫目录，同样能立刻看到新图标
+  rm -f "$root/icon-theme.cache" 2>/dev/null || true
+  log "已移除旧图标缓存: $root/icon-theme.cache（GTK 将改为直接扫描目录）"
+}
+
 install_desktop_entry() {
   local APPDIR=/usr/share/applications
   local ICONROOT=/usr/share/icons/hicolor
@@ -428,7 +446,7 @@ Comment=RKMPP hardware-accelerated video player
 Comment[zh_CN]=RKMPP 硬件加速视频播放器（RK35xx）
 Exec=/usr/local/bin/mpv-desktop %U
 TryExec=/usr/local/bin/mpv
-Icon=mpv
+Icon=rkmpp-mpv
 Terminal=false
 Categories=AudioVideo;Video;Player;
 MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mp2t;video/x-flv;video/mpeg;audio/mpeg;audio/flac;audio/x-wav;audio/ogg;
@@ -436,17 +454,28 @@ Keywords=mpv;player;video;rkmpp;hardware;
 StartupNotify=false
 EOF
   chmod 644 "$APPDIR/mpv.desktop"
-  # 自带图标：避免依赖 Icon=mpv 在发行版主题里恰好存在（trixie 的 hicolor 没有）
-  cat > "$ICONROOT/scalable/apps/mpv.svg" <<'EOF'
+  # 自带图标：
+  #  1) 用独立名字 rkmpp-mpv，而不是 mpv —— 很多主题（Numix-Circle 等）自带 mpv.svg，
+  #     主题目录优先级高于 hicolor，用 mpv 会被主题图标顶掉。
+  #  2) 写进 hicolor/scalable/apps（任意尺寸可缩放），再强制重建缓存（见下）。
+  cat > "$ICONROOT/scalable/apps/rkmpp-mpv.svg" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <rect x="4" y="4" width="120" height="120" rx="22" fill="#7b1fa2"/>
-  <path d="M50 36 L50 92 L96 64 Z" fill="#ffffff"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9c27b0"/>
+      <stop offset="1" stop-color="#5e1273"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#g)"/>
+  <path d="M52 38 L52 90 L94 64 Z" fill="#ffffff"/>
 </svg>
 EOF
-  chmod 644 "$ICONROOT/scalable/apps/mpv.svg"
+  chmod 644 "$ICONROOT/scalable/apps/rkmpp-mpv.svg"
+  # 旧版（v3.6 及以前）名字，清掉避免残留
+  rm -f "$ICONROOT/scalable/apps/mpv.svg" 2>/dev/null || true
   command -v update-desktop-database >/dev/null && update-desktop-database "$APPDIR" 2>/dev/null || true
-  command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t "$ICONROOT" 2>/dev/null || true
+  refresh_icon_cache "$ICONROOT"
   # 可选：把视频/音频默认打开方式设为 mpv（MPV_SET_DEFAULT=yes 才动，避免覆盖用户偏好）
   if [ "${MPV_SET_DEFAULT:-no}" = "yes" ]; then
     mkdir -p /etc/xdg
@@ -464,6 +493,7 @@ EOF
     log "已把视频/音频默认打开方式设为 mpv（/etc/xdg/mimeapps.list）"
   fi
   log "桌面菜单项: $APPDIR/mpv.desktop（菜单里搜 \"mpv\" 或 \"播放器\"）"
+  log "图标: $ICONROOT/scalable/apps/rkmpp-mpv.svg（Icon=rkmpp-mpv，独立命名避免被主题覆盖）"
 }
 
 # -----------------------------------------------------------------------------
