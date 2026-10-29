@@ -41,6 +41,23 @@ grep -q 'cma=512M' /boot/armbianEnv.txt 2>/dev/null \
   || warn "armbianEnv.txt 未见 cma=512M（若重刷镜像会丢）"
 
 echo "--- 3. VPU 设备节点与权限 ---"
+# 自愈：v3.5 之前的安装只写了 mpp_service 一行（/dev/rga 停在 0600），
+# 或 udev 规则存在但未在本次启动生效。这里补规则 + 重新 trigger，再逐项判定。
+RULE=/etc/udev/rules.d/99-mpp.rules
+if [ "$(id -u)" = "0" ]; then
+  _changed=0
+  [ -f "$RULE" ] || : > "$RULE"
+  grep -q 'mpp_service' "$RULE" 2>/dev/null || {
+    echo 'KERNEL=="mpp_service", MODE="0666"' >> "$RULE"; _changed=1; }
+  grep -q '"rga"' "$RULE" 2>/dev/null || {
+    echo 'KERNEL=="rga", MODE="0666"' >> "$RULE"; _changed=1; }
+  if [ "$_changed" = "1" ]; then
+    echo "  [自愈] 99-mpp.rules 缺项已补齐，重新触发 udev"
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger 2>/dev/null || true
+    sleep 1
+  fi
+fi
 if [ -e /dev/mpp_service ]; then
   perm=$(stat -c '%a' /dev/mpp_service)
   echo "  /dev/mpp_service: 存在, 权限 $perm"
@@ -55,23 +72,38 @@ fi
 if [ -e /dev/rga ]; then
   perm=$(stat -c '%a' /dev/rga)
   echo "  /dev/rga: 存在, 权限 $perm"
-  case "$perm" in
-    666|660) ok "/dev/rga 权限可用" ;;
-    *) warn "/dev/rga 权限 $perm —— 不影响 rkmpp 解码；只有 ffmpeg -vf scale_rkrga 等滤镜需要
-         修法：echo 'KERNEL==\"rga\", MODE=\"0666\"' >> /etc/udev/rules.d/99-mpp.rules && udevadm trigger" ;;
-  esac
+  if [ "$perm" = "666" ] || [ "$perm" = "660" ]; then
+    ok "/dev/rga 权限可用"
+  elif [ "$(id -u)" = "0" ] && chmod 666 /dev/rga 2>/dev/null; then
+    ok "/dev/rga 权限 ${perm}→666 已就地修正（udev 规则已补，重启后自动生效）"
+  else
+    warn "/dev/rga 权限 $perm —— 不影响 rkmpp 解码；只有 ffmpeg -vf scale_rkrga 等滤镜需要
+         修法：echo 'KERNEL==\"rga\", MODE=\"0666\"' >> /etc/udev/rules.d/99-mpp.rules && udevadm trigger"
+  fi
 else
   warn "/dev/rga 不存在（rkrga 滤镜不可用，解码不受影响）"
 fi
 
 echo "--- 4. 库与解码器 ---"
-if command -v pkg-config >/dev/null; then
+PKGCFG=$(command -v pkg-config 2>/dev/null || command -v pkgconf 2>/dev/null || true)
+if [ -n "$PKGCFG" ]; then
   for p in rockchip_mpp librga; do
-    v=$(pkg-config --modversion "$p" 2>/dev/null)
+    v=$("$PKGCFG" --modversion "$p" 2>/dev/null)
     [ -n "$v" ] && ok "$p = $v" || bad "$p 未安装"
   done
 else
-  warn "pkg-config 不存在，跳过库版本校验"
+  # mpv 编译依赖 pkg-config，但镜像裁掉后仍可能被移除；用 .pc 文件兜底判定
+  for p in rockchip_mpp librga; do
+    _found=""
+    for _d in /usr/local/lib/pkgconfig /usr/local/lib/*/pkgconfig; do
+      [ -f "${_d}/${p}.pc" ] && { _found="${_d}/${p}.pc"; break; }
+    done
+    if [ -n "$_found" ]; then
+      ok "$p .pc 存在（pkg-config 已移除，跳过版本号）"
+    else
+      bad "$p 未安装"
+    fi
+  done
 fi
 
 FFMPEG=""
