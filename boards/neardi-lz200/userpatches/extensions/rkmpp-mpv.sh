@@ -43,6 +43,23 @@
 #    * BRANCH=vendor 且 LINUXFAMILY=rk35xx / rockchip-rk3588（BSP 内核带 rkmpp 驱动）
 #    * 非 minimal 镜像
 #    * ARCH=arm64
+#    * 且未命中「mesa-vpu 选路」（见下）
+#
+# =============================================================================
+#  扩展选路规则（本仓约定，2026-10-30）—— 本扩展负责「其它」
+# -----------------------------------------------------------------------------
+#    GNOME/Wayland 桌面 + RELEASE=jammy|noble  ->  mesa-vpu.sh（PPA 栈，零编译）
+#    其它一切（X11 桌面 / Debian 系 / server）   ->  本扩展（自编译 RKMPP 栈）
+#
+#  判定在 _rkmpp_mpv__defer_to_mesa_vpu()，与 mesa-vpu.sh 的 _mesa_vpu__selected()
+#  是同一判据的正反两面：两边可以同时写进 ENABLE_EXTENSIONS，只会有一个真正生效。
+#  ⚠️ 修改任一侧必须同步另一侧，否则会双开（PPA 栈 + 自编译栈混装）或双关（都不装）。
+#
+#  为何 jammy 一律让位：mpv 0.41 硬依赖 libplacebo >= 6.338.2，jammy 自带 4.x，
+#  自编译必失败（本扩展失败会 exit 1 中止镜像构建）。jammy 请走 mesa-vpu 的 PPA 栈；
+#  若某 X11 桌面确实要用 PPA，设 MESA_VPU_FORCE=yes 即可（本扩展自动让位）。
+# =============================================================================
+#
 #  可选环境变量:
 #    RKMPP_MPV_SKIP_BUILD=yes  跳过源码编译（仅做 X11 强制 + CMA 兜底，用于快速验证）
 #
@@ -54,6 +71,31 @@
 #    5. /boot/armbianEnv.txt              —— extraboardargs=cma=512M（4K 流畅前提，首启即生效）
 #    6. 桌面会话强制 X11（gdm3/sddm）+ modesetting TearFree
 # =============================================================================
+
+# 本扩展是否应当让位给 mesa-vpu（与 common/extensions/mesa-vpu.sh 的
+# _mesa_vpu__selected() 严格互补；两边同改，勿单独调整）
+function _rkmpp_mpv__defer_to_mesa_vpu() {
+	# mesa-vpu 只处理 jammy / noble；其它发行版一律由本扩展接手
+	[[ "${RELEASE:-}" =~ ^(jammy|noble)$ ]] || return 1
+
+	# minimal 镜像：mesa-vpu 不装，本扩展也不装（下面各自有自己的 minimal 守卫）
+	[[ "${BUILD_MINIMAL:-}" == "yes" ]] && return 1
+
+	# 强制走 PPA 栈（含 X11 桌面）
+	[[ "${MESA_VPU_FORCE:-no}" == "yes" ]] && return 0
+
+	# server/CLI：mesa-vpu 不接管，本扩展接手（只装解码栈，不动显示管理器）
+	[[ "${BUILD_DESKTOP:-}" == "yes" ]] || return 1
+
+	# jammy 只能走 PPA（libplacebo 过旧，自编译 mpv 必失败）
+	[[ "${RELEASE}" == "jammy" ]] && return 0
+
+	# noble：Wayland 能力桌面归 mesa-vpu，X11 桌面归本扩展
+	case "${DESKTOP_ENVIRONMENT:-}" in
+		gnome | kde-plasma | budgie) return 0 ;;
+		*) return 1 ;;
+	esac
+}
 
 function extension_prepare_config__rkmpp_mpv() {
 	# 仅 vendor 内核 + Rockchip rk35xx/rk3588 家族（BSP 内核才带 rkmpp/RGA 驱动）
@@ -68,6 +110,24 @@ function extension_prepare_config__rkmpp_mpv() {
 		return 0
 	fi
 
+	# 该组合由 mesa-vpu 接管，本扩展让位（避免 PPA 栈与自编译栈混装 / X11 强制打架）
+	if _rkmpp_mpv__defer_to_mesa_vpu; then
+		display_alert "Extension: ${EXTENSION}" \
+			"defer to mesa-vpu for ${RELEASE}/${DESKTOP_ENVIRONMENT:-no-desktop} (Wayland + PPA stack)" "info"
+		return 0
+	fi
+
+	# 预检：libplacebo >= 6.338.2 是 mpv 0.41 的硬依赖，自带的 rk35xx-rkmpp-mpv-build.sh
+	# 在版本不足处会 exit 1（故意中止，避免交付硬解失效的镜像）。已知不满足的发行版
+	# 在这里就喊出来，省掉 2-3 小时后才变红。
+	#   对照: trixie 7.349 ✓ / noble 6.338.2 ✓ / bookworm 5.229 ✗ / jammy ✗(已让位 mesa-vpu)
+	case "${RELEASE}" in
+		bookworm | bullseye | buster | focal)
+			display_alert "Extension: ${EXTENSION}" \
+				"${RELEASE} 自带 libplacebo < 6.338.2: mpv 自编译会在 libplacebo 检查处中止镜像构建。请改 RELEASE=trixie|noble，或设 RKMPP_MPV_SKIP_BUILD=yes 只做 CMA/X11 兜底(无硬解栈)" "warn"
+			;;
+	esac
+
 	display_alert "Extension: ${EXTENSION}" "RKMPP + mpv v3 stack (X11, native rkmpp backend) enabled for ${LINUXFAMILY}/${BRANCH}" "info"
 	return 0
 }
@@ -78,6 +138,11 @@ function post_install_kernel_debs__rkmpp_mpv() {
 		return 0
 	fi
 	if [[ "${BUILD_MINIMAL}" == "yes" ]]; then
+		return 0
+	fi
+	# 与 extension_prepare_config 同一让位判定（此处再判一次是硬保险：
+	# 即使 prepare 阶段被跳过，也绝不能在 mesa-vpu 的地盘上再自编译一套栈）
+	if _rkmpp_mpv__defer_to_mesa_vpu; then
 		return 0
 	fi
 
