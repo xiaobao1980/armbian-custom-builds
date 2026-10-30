@@ -5,7 +5,7 @@
 # Enables 3D and multimedia, 4K VPU with Chromium, acceleration for Ubuntu. Debian only 3D
 #
 
-function extension_prepare_config__3d() {
+function extension_prepare_config__mesa-vpu() {
 	# Silently deny old releases which are not supported but are still in the system
 	[[ "${RELEASE}" =~ ^(bookworm|bullseye|buster|focal|jammy)$ ]] && return 0
 
@@ -29,7 +29,7 @@ function extension_prepare_config__3d() {
 
 }
 
-function post_install_kernel_debs__3d() {
+function post_install_kernel_debs__mesa-vpu() {
 	# Silently deny old releases which are not supported but are still in the system
 	[[ "${RELEASE}" =~ ^(bookworm|bullseye|buster|focal|jammy)$ ]] && return 0
 
@@ -100,7 +100,7 @@ function post_install_kernel_debs__3d() {
 	return 0
 }
 
-function post_armbian_repo_customize_image__browser() {
+function post_armbian_repo_customize_image__mesa-vpu() {
 	# Silently deny old releases which are not supported but are still in the system
 	[[ "${RELEASE}" =~ ^(bookworm|bullseye|buster|focal|jammy)$ ]] && return 0
 
