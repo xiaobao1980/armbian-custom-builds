@@ -148,6 +148,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 必须最先执行：GitHub 会在每个 step 开头回显 env，而 add-mask 只有在
+      # 「值已经带掩码」之后才生效。这里从事件载荷里取密码（不进 run 脚本文本、
+      # 不进 env 回显），立刻加掩码，后续所有 step 的 env 回显都会显示成 ***。
+      - name: 注册密码掩码 (先于任何 env 回显, 避免明文进日志)
+        run: |
+          mask() { if [ -n "$1" ]; then echo "::add-mask::$1"; fi; return 0; }
+          if [ -r "${GITHUB_EVENT_PATH:-/dev/null}" ] && command -v jq >/dev/null 2>&1; then
+            mask "$(jq -r '.inputs.user_password // ""' "$GITHUB_EVENT_PATH" 2>/dev/null)"
+            mask "$(jq -r '.inputs.root_password // ""' "$GITHUB_EVENT_PATH" 2>/dev/null)"
+          fi
+          echo "密码掩码已注册"
+
       - name: Free disk space (构建需要 ~50GB)
         uses: jlumbroso/free-disk-space@main
         with:
