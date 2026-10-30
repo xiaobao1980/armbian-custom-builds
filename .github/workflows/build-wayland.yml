@@ -276,6 +276,7 @@ jobs:
 
           {
             echo "args=${ARGS}"
+            echo "board=${BOARD}"
             echo "compress=${COMPRESS}"
             echo "release=${REL_FINAL}"
             echo "desktop=${DE_FINAL}"
@@ -288,12 +289,23 @@ jobs:
       - name: 预检 (Wayland 硬解栈可用性)
         run: |
           set -uo pipefail
-          FAMILY=$(sed -n 's/^BOARDFAMILY=//p' "armbian-build/config/boards/${{ inputs.board }}.csc" 2>/dev/null | tr -d '"' | head -1)
+          # 注意：workflow 的板卡目录名 ≠ armbian 的 BOARD（h96s 目录里是 h96-m9.csc），
+          # 必须用 args 步骤从 build.env 解析出来的真实 BOARD
+          ABOARD="${{ steps.args.outputs.board }}"
+          # 板卡描述文件可能是 .csc（社区板）也可能是 .conf（官方/半官方，如 am60-sa12.conf）
+          CSC=""
+          for ext in csc conf; do
+            if [ -f "armbian-build/config/boards/${ABOARD}.${ext}" ]; then
+              CSC="armbian-build/config/boards/${ABOARD}.${ext}"
+              break
+            fi
+          done
+          FAMILY=$(sed -n 's/^BOARDFAMILY=//p' "${CSC:-/dev/null}" 2>/dev/null | tr -d '"' | head -1)
           FAMILY="${FAMILY:-unknown}"
           REL="${{ steps.args.outputs.release }}"
           DE="${{ steps.args.outputs.desktop }}"
 
-          echo "家族=${FAMILY} 发行版=${REL} 桌面=${DE}"
+          echo "板卡=${ABOARD} 家族=${FAMILY} 发行版=${REL} 桌面=${DE}"
 
           case "${FAMILY}" in
             rk35xx|rockchip-rk3588) ;;
