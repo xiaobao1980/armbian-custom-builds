@@ -1,0 +1,441 @@
+name: Build Armbian Image (Wayland 定制版)
+
+# =============================================================================
+#  Wayland 定制版 —— 与 build-image.yml（标准版）、build-x11.yml（X11 定制版）并存
+# -----------------------------------------------------------------------------
+#  固定策略（评测点，不可覆盖）：
+#    · 桌面必须是支持 Wayland 的会话：gnome / kde-plasma / budgie
+#    · 硬解栈走 mesa-vpu（amazingfated rockchip-multimedia PPA + panthor-gpu overlay，
+#      零编译）。⚠️ 该 PPA 只发布 jammy / noble —— trixie/bookworm 上 mesa-vpu 会
+#      自动跳过、镜像里就没有硬解栈，所以默认直接拦下来（可用 allow_no_hwdec 放行）。
+#    · 显示管理器按 Wayland 会话配置（gdm3 → WaylandEnable=true，覆盖 rkmpp-mpv 的强制 X11）
+#    · 不启用 rkmpp-mpv（它是 X11 专用栈，在 Wayland 下 mpv 拿不到 rkmpp 后端）
+#  可配置：板卡 / 发行版 / 桌面 / 默认用户（用户名·密码·root 密码·附加组·
+#          sudo 免密·桌面自动登录）/ 中文环境 / 压缩格式 / runner / 是否发 Release
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: "板卡 (仅 rk35xx / rockchip-rk3588 家族; aio-3288c 是 armhf 无 rkmpp, 请用 X11 定制版)"
+        type: choice
+        required: true
+        default: h96s
+        options:
+          - h96s
+          - neardi-lz200
+          - am60-sa12
+
+      release:
+        description: "发行版 (Wayland 硬解栈 PPA 只支持 jammy/noble; default=跟随板卡)"
+        type: choice
+        required: false
+        default: default
+        options:
+          - default
+          - noble
+          - jammy
+          - trixie
+          - bookworm
+
+      desktop_environment:
+        description: "Wayland 桌面环境"
+        type: choice
+        required: false
+        default: gnome
+        options:
+          - gnome
+          - kde-plasma
+          - budgie
+
+      desktop_tier:
+        description: "桌面软件档位 (minimal=仅桌面 / mid=+浏览器媒体 / full=+办公开发)"
+        type: choice
+        required: false
+        default: mid
+        options:
+          - minimal
+          - mid
+          - full
+
+      user_name:
+        description: "默认用户名 (小写字母/数字/下划线/连字符; 留空=不创建默认用户)"
+        type: string
+        required: false
+        default: xiaobao
+
+      user_password:
+        description: "默认用户密码 (仅允许 A-Za-z0-9 . _ + # = : @ % -，4~64 位)"
+        type: string
+        required: false
+        default: "123456"
+
+      root_password:
+        description: "root 密码 (留空=不改 root 密码; 字符集同用户密码)"
+        type: string
+        required: false
+        default: "123456789"
+
+      user_groups:
+        description: "附加组 (逗号分隔, 不存在的组自动跳过)"
+        type: string
+        required: false
+        default: "sudo,adm,audio,video,plugdev,netdev,render,input,dialout,cdrom"
+
+      sudo_nopasswd:
+        description: "该用户 sudo 免密"
+        type: boolean
+        required: false
+        default: true
+
+      desktop_autologin:
+        description: "桌面自动登录该用户 (烧卡后开机直接进 Wayland 桌面)"
+        type: boolean
+        required: false
+        default: true
+
+      chinese:
+        description: "中文环境 (locale/字体/输入法/Chromium 中文化; 需 rk35xx vendor 内核)"
+        type: boolean
+        required: false
+        default: true
+
+      allow_no_hwdec:
+        description: "允许在无硬解栈的发行版上继续构建 (trixie/bookworm 上 PPA 不可用)"
+        type: boolean
+        required: false
+        default: false
+
+      compress:
+        description: "镜像压缩格式"
+        type: choice
+        required: false
+        default: xz
+        options:
+          - xz
+          - 7z
+          - none
+
+      build_ref:
+        description: "armbian/build 引用 (分支/标签; 主线是 main)"
+        type: string
+        required: false
+        default: "main"
+
+      runner:
+        description: "运行器 (arm64 板选 ubuntu-24.04-arm 可原生编译, 免 qemu 且更快)"
+        type: choice
+        required: false
+        default: ubuntu-24.04-arm
+        options:
+          - ubuntu-24.04-arm
+          - ubuntu-latest
+
+      publish_release:
+        description: "构建成功后发布到 GitHub Releases"
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space (构建需要 ~50GB)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          toolchain: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: 注册 QEMU binfmt (跨架构 arm64/armhf 构建必需)
+        run: |
+          set -euo pipefail
+          if [ "$(uname -m)" = "aarch64" ] && [ "${{ inputs.board }}" != "aio-3288c" ]; then
+            echo "原生 arm64 runner + arm64 目标, 无需 qemu binfmt"
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static binfmt-support
+          sudo systemctl restart systemd-binfmt 2>/dev/null || true
+          sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
+          sudo update-binfmts --enable qemu-arm 2>/dev/null || true
+          if ! ls /proc/sys/fs/binfmt_misc/ | grep -qi 'aarch64'; then
+            echo "apt 注册失败, 改用 tonistiigi/binfmt 兜底"
+            docker run --privileged --rm tonistiigi/binfmt --install arm64,arm
+          fi
+          ls /proc/sys/fs/binfmt_misc/
+
+      - name: Clone armbian/build (${{ inputs.build_ref }})
+        run: |
+          git clone --depth=1 --branch "${{ inputs.build_ref }}" \
+            https://github.com/armbian/build armbian-build
+
+      - name: 同步板卡自定义文件 (仅该板卡, 互不干扰)
+        run: bash scripts/sync-board-to-build.sh "${{ inputs.board }}" armbian-build
+
+      - name: 缓存 Armbian 构建产物 (kernel/uboot debs + rootfs, 加速重试)
+        uses: actions/cache@v4
+        with:
+          path: |
+            armbian-build/output/debs
+            armbian-build/cache/rootfs
+          key: armbian-wayland-${{ inputs.board }}-${{ inputs.release }}-${{ inputs.desktop_environment }}-v1
+          restore-keys: |
+            armbian-wayland-${{ inputs.board }}-${{ inputs.release }}-
+            armbian-wayland-${{ inputs.board }}-
+
+      - name: 校验用户设置 + 组装构建参数
+        id: args
+        env:
+          IN_BOARD: ${{ inputs.board }}
+          IN_REL: ${{ inputs.release }}
+          IN_DE: ${{ inputs.desktop_environment }}
+          IN_TIER: ${{ inputs.desktop_tier }}
+          IN_USER: ${{ inputs.user_name }}
+          IN_UPASS: ${{ inputs.user_password }}
+          IN_RPASS: ${{ inputs.root_password }}
+          IN_GROUPS: ${{ inputs.user_groups }}
+          IN_CHINESE: ${{ inputs.chinese }}
+          IN_COMPRESS: ${{ inputs.compress }}
+        run: |
+          set -euo pipefail
+
+          BE="boards/${IN_BOARD}/build.env"
+          [ -f "$BE" ] || { echo "::error::找不到 $BE"; exit 1; }
+          set -a; source "$BE"; set +a
+
+          echo "::add-mask::${IN_UPASS}"
+          [ -n "${IN_RPASS}" ] && echo "::add-mask::${IN_RPASS}" || true
+
+          if [ -n "${IN_USER}" ]; then
+            [[ "${IN_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+              || { echo "::error::user_name 非法: '${IN_USER}'（要求 ^[a-z_][a-z0-9_-]{0,31}$）"; exit 1; }
+            case "${IN_USER}" in
+              root|daemon|bin|sys|nobody|admin) echo "::error::user_name '${IN_USER}' 是系统保留名"; exit 1 ;;
+            esac
+            [[ "${IN_UPASS}" =~ ^[A-Za-z0-9._+#=:@%-]{4,64}$ ]] \
+              || { echo "::error::user_password 字符集受限（只允许 A-Za-z0-9 . _ + # = : @ % -，4~64 位）"; exit 1; }
+          fi
+          if [ -n "${IN_RPASS}" ]; then
+            [[ "${IN_RPASS}" =~ ^[A-Za-z0-9._+#=:@%-]{4,64}$ ]] \
+              || { echo "::error::root_password 字符集受限（同 user_password 规则）"; exit 1; }
+          fi
+          if [ -n "${IN_GROUPS}" ]; then
+            [[ "${IN_GROUPS}" =~ ^[A-Za-z0-9_,]*$ ]] \
+              || { echo "::error::user_groups 非法（只允许字母数字下划线与逗号）"; exit 1; }
+          fi
+
+          pick() { [ -n "$2" ] && [ "$2" != "default" ] && printf '%s' "$2" || printf '%s' "$1"; }
+          REL_FINAL="$(pick "${RELEASE}" "${IN_REL}")"
+          DE_FINAL="${IN_DE}"
+          TIER_FINAL="${IN_TIER}"
+          BRANCH_FINAL="${BRANCH}"
+
+          # Wayland 版只走 mesa-vpu；显式剔除 rkmpp-mpv（X11 专用栈，会强制
+          # WaylandEnable=false 且 mpv 在 Wayland 无 rkmpp 后端）
+          EXT=""
+          add_ext() { case ",${EXT}," in *",$1,"*) ;; *) EXT="${EXT:+${EXT},}$1" ;; esac; }
+          [ -n "${IN_USER}" ] && add_ext default-user
+          [ "${IN_CHINESE}" = "true" ] && add_ext rk35xx-chinese-desktop
+          add_ext mesa-vpu
+
+          case "${IN_COMPRESS}" in
+            7z)   COMPRESS="sha,img,7z" ;;
+            none) COMPRESS="sha,img"    ;;
+            *)    COMPRESS="sha,img,xz" ;;
+          esac
+
+          ARGS="BOARD=${BOARD} BRANCH=${BRANCH_FINAL} RELEASE=${REL_FINAL}"
+          ARGS="${ARGS} BUILD_DESKTOP=yes BUILD_MINIMAL=no"
+          ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DE_FINAL} DESKTOP_TIER=${TIER_FINAL}"
+          ARGS="${ARGS} ENABLE_EXTENSIONS=${EXT}"
+
+          {
+            echo "args=${ARGS}"
+            echo "compress=${COMPRESS}"
+            echo "release=${REL_FINAL}"
+            echo "desktop=${DE_FINAL}"
+            echo "branch=${BRANCH_FINAL}"
+            echo "extensions=${EXT}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "构建参数: ${ARGS}"
+
+      - name: 预检 (Wayland 硬解栈可用性)
+        run: |
+          set -uo pipefail
+          FAMILY=$(sed -n 's/^BOARDFAMILY=//p' "armbian-build/config/boards/${{ inputs.board }}.csc" 2>/dev/null | tr -d '"' | head -1)
+          FAMILY="${FAMILY:-unknown}"
+          REL="${{ steps.args.outputs.release }}"
+          DE="${{ steps.args.outputs.desktop }}"
+
+          echo "家族=${FAMILY} 发行版=${REL} 桌面=${DE}"
+
+          case "${FAMILY}" in
+            rk35xx|rockchip-rk3588) ;;
+            *)
+              echo "::error::${FAMILY} 不是 rk35xx/rockchip-rk3588 家族：mesa-vpu 的 panthor-gpu overlay / rockchip-multimedia PPA 都要求厂商内核。请改用标准版或 X11 定制版。"
+              exit 1
+              ;;
+          esac
+
+          # mesa-vpu 只在 jammy/noble 有 PPA；其余发行版它会自动跳过 -> 镜像无硬解
+          case "${REL}" in
+            jammy | noble)
+              echo "硬解栈: mesa-vpu（rockchip-multimedia PPA + panthor-gpu overlay，零编译）"
+              ;;
+            *)
+              if [ "${{ inputs.allow_no_hwdec }}" = "true" ]; then
+                echo "::warning::${REL} 上 mesa-vpu 会自动跳过（PPA 只发布 jammy/noble）—— 本镜像将**不含硬解栈**，仅供桌面/中文环境验证。"
+              else
+                echo "::error::${REL} 上没有 Wayland 硬解路径：mesa-vpu 的 PPA 只发布 jammy/noble。请把 release 改成 noble（或 jammy）；确实只要桌面不要硬解，请勾选 allow_no_hwdec。"
+                exit 1
+              fi
+              ;;
+          esac
+
+          case "${DE}" in
+            gnome | kde-plasma | budgie) ;;
+            *) echo "::warning::${DE} 不是 Wayland 优先桌面，自动登录可能落到 X11 会话" ;;
+          esac
+
+      - name: 构建摘要
+        run: |
+          cat <<EOF
+          ┌────────────────────────────────────────────────┐
+            Wayland 定制版
+            板卡        : ${{ inputs.board }}
+            发行版      : ${{ steps.args.outputs.release }}   (分支 ${{ steps.args.outputs.branch }})
+            桌面        : ${{ steps.args.outputs.desktop }} / 档位 ${{ inputs.desktop_tier }}
+            默认用户    : ${{ inputs.user_name }}   (sudo免密=${{ inputs.sudo_nopasswd }}, 自动登录=${{ inputs.desktop_autologin }})
+            中文环境    : ${{ inputs.chinese }}
+            扩展        : ${{ steps.args.outputs.extensions }}
+            压缩        : ${{ inputs.compress }}
+          ────────────────────────────────────────────────
+          最终参数: ${{ steps.args.outputs.args }}
+          EOF
+
+      - name: 编译镜像
+        env:
+          DEFAULT_USER_NAME: ${{ inputs.user_name }}
+          DEFAULT_USER_PASSWORD: ${{ inputs.user_password }}
+          DEFAULT_ROOT_PASSWORD: ${{ inputs.root_password }}
+          DEFAULT_USER_GROUPS: ${{ inputs.user_groups }}
+          DEFAULT_USER_SHELL: /bin/bash
+          DEFAULT_SUDO_NOPASSWD: ${{ inputs.sudo_nopasswd && 'yes' || 'no' }}
+          DEFAULT_DESKTOP_AUTOLOGIN: ${{ inputs.desktop_autologin && 'yes' || 'no' }}
+          DEFAULT_DESKTOP_SESSION_TYPE: wayland
+          RK_CN_USER: ${{ inputs.user_name }}
+          RK_CN_USER_PASS: ${{ inputs.user_password }}
+          RK_CN_ROOT_PASS: ${{ inputs.root_password }}
+          RK_CN_IME: auto
+        run: |
+          cd armbian-build
+          ./compile.sh \
+            ${{ steps.args.outputs.args }} \
+            KERNEL_CONFIGURE=no \
+            KERNEL_BTF=no \
+            EXPERT=yes \
+            SHARE_LOG=yes \
+            COMPRESS_OUTPUTIMAGE=${{ steps.args.outputs.compress }} \
+            build
+
+      - name: 上传镜像产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: armbian-${{ inputs.board }}-wayland-${{ github.run_number }}
+          path: |
+            armbian-build/output/images/**/*.img*
+            armbian-build/output/images/**/*.sha
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: 发布镜像到 GitHub Releases
+        if: ${{ success() && inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOARD_NAME: ${{ inputs.board }}
+          BUILD_ARGS: ${{ steps.args.outputs.args }}
+          USER_NAME: ${{ inputs.user_name }}
+        run: |
+          set -euo pipefail
+          DATE_TAG="$(date -u +%Y%m%d)"
+          TAG="${BOARD_NAME}-wayland-${DATE_TAG}-r${GITHUB_RUN_NUMBER}"
+          IMG_DIR="armbian-build/output/images"
+
+          ASSETS=()
+          shopt -s nullglob
+          for f in "${IMG_DIR}"/*; do
+            sz=$(stat -c%s "$f")
+            if [ "$sz" -gt 2147483648 ]; then
+              echo "::warning::$(basename "$f") 超过 2GiB, 不进 Release (仅 Artifacts)"
+              continue
+            fi
+            ASSETS+=("$f")
+          done
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "::error::没有可发布的镜像文件"; exit 1
+          fi
+
+          SHAS=""
+          for f in "${ASSETS[@]}"; do
+            case "$f" in *.img*) SHAS+="$(basename "$f")  $(awk '{print $1}' "$f.sha" 2>/dev/null || sha256sum "$f" | awk '{print $1}')\n" ;; esac
+          done
+
+          NOTES="## Armbian 镜像（Wayland 定制版） — ${BOARD_NAME}
+
+          | 项 | 值 |
+          |---|---|
+          | 板卡 | ${BOARD_NAME} |
+          | 桌面 | Wayland / ${{ steps.args.outputs.desktop }} |
+          | 默认用户 | \`${USER_NAME}\` |
+          | 桌面自动登录 | ${{ inputs.desktop_autologin }} |
+          | 中文环境 | ${{ inputs.chinese }} |
+          | 硬解栈 | mesa-vpu（rockchip-multimedia PPA，仅 jammy/noble 有效） |
+          | 构建参数 | \`${BUILD_ARGS}\` |
+          | 构建时间 (UTC) | $(date -u '+%Y-%m-%d %H:%M') |
+
+          > 密码在构建日志与 Release 说明里均不体现；以你填写的工作流参数为准。
+
+          ### 烧写
+          \`\`\`bash
+          xzcat *.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
+          \`\`\`
+
+          ### 校验
+          \`\`\`
+          ${SHAS}
+          \`\`\`
+          [构建日志](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          "
+
+          if gh release view "${TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release ${TAG} 已存在, 覆盖资产"
+            gh release upload "${TAG}" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "${TAG}" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Armbian ${BOARD_NAME} Wayland ${DATE_TAG} #${GITHUB_RUN_NUMBER}" \
+              --notes "${NOTES}"
+          fi
+          echo "Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      - name: 上传构建日志 (失败时)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ inputs.board }}-wayland-${{ github.run_number }}
+          path: armbian-build/output/logs/**
+          retention-days: 90

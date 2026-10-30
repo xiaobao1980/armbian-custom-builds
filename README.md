@@ -75,6 +75,37 @@ Actions 页面两个入口：
 
 > ⚠️ **aio-3288c 注意**：其内核补丁按 `rockchip-6.18` 目录组织，要求 armbian/build 的 edge 内核仍为 6.18.x。若上游 edge 已升级（如 6.19+），请在 `build_ref` 输入中固定一个 6.18 时代的 build 引用（tag/commit）。
 
+### 定制版工作流（X11 / Wayland）
+
+在标准版之外另有两条**开箱即用**的定制流程，与标准版并存、互不影响：
+
+| Workflow | 文件 | 固定策略 | 典型用法 |
+|---|---|---|---|
+| Build Armbian Image (单板) | `build-image.yml` | 全部可调（标准版） | 通用构建 |
+| Build All Boards (矩阵) | `build-all.yml` | 各板 `build.env` | 批量出图 |
+| **Build Armbian Image (X11 定制版)** | `build-x11.yml` | 桌面强制 X11（xfce/cinnamon/mate/lxqt/i3-wm）+ 硬解走 `rkmpp-mpv`（mpv/ffmpeg-rockchip 零拷贝）+ gdm3 `WaylandEnable=false` | neardi-lz200 / trixie 这类已验证的 X11 硬解板 |
+| **Build Armbian Image (Wayland 定制版)** | `build-wayland.yml` | 桌面强制 Wayland（gnome/kde-plasma/budgie）+ 硬解走 `mesa-vpu`（rockchip-multimedia PPA，零编译）+ gdm3 `WaylandEnable=true`；**不启用** `rkmpp-mpv` | h96s / noble 这类 Wayland 板 |
+
+两者都额外提供**默认用户设置**（由公共扩展 `common/extensions/default-user.sh` 在构建期 chroot 内落盘，不依赖首启 rc.local 时序）：
+
+| 输入 | 默认 | 说明 |
+|---|---|---|
+| `user_name` | `xiaobao` | 小写字母/数字/`_`/`-`，≤32；留空=不创建默认用户 |
+| `user_password` | `123456` | 仅 `A-Za-z0-9 . _ + # = : @ % -`，4~64 位（含空格/引号的密码会污染 `compile.sh` 参数，CI 直接拒绝） |
+| `root_password` | `123456789` | 留空=不改 root 密码 |
+| `user_groups` | `sudo,adm,audio,video,plugdev,netdev,render,input,dialout,cdrom` | rootfs 里不存在的组自动跳过 |
+| `sudo_nopasswd` | `true` | 写入 `/etc/sudoers.d/90-<user>`（`visudo -cf` 校验失败会自动删除） |
+| `desktop_autologin` | `true` | lightdm / gdm3 / sddm 均支持；烧卡开机直接进桌面 |
+
+落地痕迹（镜像内，**不含密码**）：`/etc/default-user.conf`（用户/组/免密/自动登录开关）、`/etc/default-user.autologin`（实际 DM 与会话名）。
+
+> 🔐 密码经**环境变量**传给构建框架（不拼进 `compile.sh` 命令行），因此不会出现在 Armbian 的 `Applying cmdline param` 日志里；workflow 侧另有 `::add-mask::` 与字符集白名单双保险。
+
+> ⚠️ **Wayland 定制版的硬解前提**：`mesa-vpu` 的 PPA 只发布 `jammy` / `noble`。选 `trixie` / `bookworm` 时 `mesa-vpu` 会自动跳过（镜像无硬解栈），预检步骤默认**直接拦下**；确实只要桌面不要硬解时才勾 `allow_no_hwdec`。
+
+> ⚠️ **X11 定制版的预编译 deb**：`rkmpp-stack_*.deb` 的 build-info 写死 `DISTRO_CODENAME=trixie`，目标不是 trixie 时扩展会回退 chroot 源码编译（qemu 下极易撞 6h 上限），预检步骤会提前 `::warning::`。
+
+
 ## 硬解栈选路：mesa-vpu / rkmpp-mpv（自动二选一）
 
 **规则（唯一判据）：**

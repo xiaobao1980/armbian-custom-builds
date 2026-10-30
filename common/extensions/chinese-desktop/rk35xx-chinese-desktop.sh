@@ -103,6 +103,20 @@ rk_cn_setup_user() {
 # 由 rk35xx-chinese-desktop 部署：首次启动创建普通用户并设密码（幂等）
 [ -f /var/lib/armbian-firstboot-user.done ] && exit 0
 
+# 幂等：若镜像已在构建期由 default-user 扩展建好用户（/etc/default-user.conf 存在），
+# 这里只同步密码/组，绝不 userdel + 重建 —— 否则首启会把构建期配好的 uid、家目录、
+# sudo 免密和自动登录对象一起抹掉，桌面直接登不进去。
+if [ -f /etc/default-user.conf ]; then
+    usermod -s /bin/bash ${RK_CN_USER} 2>/dev/null || true
+    for g in sudo adm plugdev audio video netdev dialout cdrom floppy tape; do
+        getent group "\$g" >/dev/null 2>&1 && usermod -aG "\$g" ${RK_CN_USER} 2>/dev/null || true
+    done
+    echo "root:${RK_CN_ROOT_PASS}" | chpasswd 2>/dev/null || true
+    echo "${RK_CN_USER}:${RK_CN_USER_PASS}" | chpasswd 2>/dev/null || true
+    touch /var/lib/armbian-firstboot-user.done
+    exit 0
+fi
+
 userdel -r ${RK_CN_USER} 2>/dev/null || true
 rm -rf /home/${RK_CN_USER} 2>/dev/null || true
 groupadd -g 1000 ${RK_CN_USER} 2>/dev/null || true
