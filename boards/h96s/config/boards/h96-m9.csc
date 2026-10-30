@@ -242,12 +242,18 @@ XORG_EOF
 #
 # 为什么要有这个 hook（2026-08-30 实证，三条结论）：
 #
-# 1) extensions/mesa-vpu.sh 已被官方废弃。提交 27c668343
-#    "mesa-vpu: delete extension — fully covered by armbian-config" 把它删除，
+# 1) extensions/mesa-vpu.sh 在上游 armbian/build 已被删除。提交 27c668343
+#    "mesa-vpu: delete extension — fully covered by armbian-config" 把它删掉，
 #    职责迁到 armbian-configng 的 module_desktops
 #    （_module_desktops_rockchip_multimedia，module_desktops.sh:147）。
-#    本树 HEAD（21a965086）里文件仍在，但已是待删除状态——
-#    不要再走 ENABLE_EXTENSIONS=mesa-vpu。
+#    实测上游 main 已取不到该文件（raw.githubusercontent.com/armbian/build/main/
+#    extensions/mesa-vpu.sh → 404）。
+#    ⚠️ 但本仓库自带一份：common/extensions/mesa-vpu.sh，
+#    scripts/sync-board-to-build.sh 会把它同步到 userpatches/extensions/，
+#    Armbian 按「扩展名 → userpatches/extensions/<name>.sh」解析，因此
+#    ENABLE_EXTENSIONS=mesa-vpu 在本仓依然有效（noble/jammy + Wayland 桌面生效）。
+#    本 hook 保留为**兜底 + 补充**（扩展没装 mpp 用户态与 vpu.service），
+#    两者共存是幂等的：PPA 源与 pin 都有存在性判断。
 #
 # 2) configng 那条路径在完整镜像构建里实测没跑。./compile.sh build 的日志
 #    中既无 BOARDFAMILY 记录也无 module_desktops 调用痕迹；rootfs 里能查到
@@ -285,7 +291,9 @@ function post_family_tweaks__h96_m9_vpu_stack() {
 	# 2) Pin 必须是 1001 而不是 990：PPA 的 ffmpeg/chromium 需要能跨源替换
 	#    官方同名包，990 会以"降级"为由拒绝；完全没有 pin 时 apt 直接报
 	#    "Packages were downgraded and -y was used without --allow-downgrades"。
-	cat > "${SDCARD}"/etc/apt/preferences.d/amazingfated-rk-rockchip-multimedia-pin <<- 'EOF'
+	#    文件名与 common/extensions/mesa-vpu.sh 写入的保持一致 —— 两个 hook 都跑时
+	#    只有一个 pin 文件，内容相同且幂等，避免 /etc/apt/preferences.d 里出现两份。
+	cat > "${SDCARD}"/etc/apt/preferences.d/amazingfated-rk3588-rockchip-multimedia-pin <<- 'EOF'
 		Package: *
 		Pin: release o=LP-PPA-liujianfeng1994-rockchip-multimedia
 		Pin-Priority: 1001
@@ -297,13 +305,19 @@ function post_family_tweaks__h96_m9_vpu_stack() {
 		return 0
 	fi
 
-	# 4) 装包。libv4l-0 必须单独先装：rockchip-multimedia-config 的 postinst
-	#    依赖 V4L2 用户态库已在位；且 rockchip-multimedia-config 会装上
+	# 4) 装包。libv4l 必须单独先装：rockchip-multimedia-config 的 postinst
+	#    依赖 V4L2 用户态库已在位（实测该包 Depends 只有 udev，**不会**自动拉
+	#    libv4l，所以这一步不能省）；且 rockchip-multimedia-config 会装上
 	#    99-rk-device-permissions.rules（把 /dev/mpp_service 从
 	#    crw------- root root 改成 crw-rw---- root video），否则桌面会话的
 	#    普通用户根本打不开 VPU。
-	do_with_retries 3 chroot_sdcard_apt_get_install libv4l-0 ||
-		display_alert "$BOARD" "libv4l-0 install failed; rockchip-multimedia postinst may fail" "wrn"
+	#    包名随 time_t 迁移变化：jammy/bullseye -> libv4l-0；noble/trixie+ -> libv4l-0t64
+	local v4l_pkg="libv4l-0"
+	case "${RELEASE:-}" in
+		noble | oracular | plucky | questing | resolute | trixie) v4l_pkg="libv4l-0t64" ;;
+	esac
+	do_with_retries 3 chroot_sdcard_apt_get_install "${v4l_pkg}" ||
+		display_alert "$BOARD" "${v4l_pkg} install failed; rockchip-multimedia postinst may fail" "wrn"
 
 	do_with_retries 3 chroot_sdcard_apt_get_install \
 		librockchip-mpp1 rockchip-mpp-demos gstreamer1.0-rockchip1 \

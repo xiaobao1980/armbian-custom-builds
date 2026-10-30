@@ -23,13 +23,25 @@ if [[ ! -d "${BUILD}" ]]; then
     exit 1
 fi
 
+# 清理 macOS 元数据文件（.DS_Store / AppleDouble ._*）。
+# 背景：这些文件不被 .gitignore 跟踪，但 `cp -a` 会照样拷进构建树，
+# 历史上曾以 .AppleDouble 形式污染过产物。拷贝后主动清理目标侧，最稳。
+purge_macos_metadata() {
+    local dir="$1"
+    [[ -d "${dir}" ]] || return 0
+    # GNU find 的 -delete 会隐式打印被删文件名，这里静音，保持构建日志干净
+    find "${dir}" -name '.DS_Store' -type f -delete >/dev/null 2>&1 || true
+    find "${dir}" -name '._*' -type f -delete >/dev/null 2>&1 || true
+}
+
 # 目录级合并拷贝: config/ patch/ userpatches/
 sync_subdir() {
     local sub="$1"
     [[ -d "${SRC}/${sub}" ]] || return 0
     mkdir -p "${BUILD}/${sub}"
     cp -a "${SRC}/${sub}/." "${BUILD}/${sub}/"
-    echo "  synced ${sub}/ ($(find "${SRC}/${sub}" -type f | wc -l | tr -d ' ') files)"
+    purge_macos_metadata "${BUILD}/${sub}"
+    echo "  synced ${sub}/ ($(find "${SRC}/${sub}" -type f ! -name '.DS_Store' ! -name '._*' | wc -l | tr -d ' ') files)"
 }
 
 echo "==> 同步板卡 '${BOARD}' -> ${BUILD}"
@@ -42,7 +54,8 @@ sync_subdir userpatches
 if [[ -d "${REPO_ROOT}/common/extensions" ]]; then
     mkdir -p "${BUILD}/userpatches/extensions"
     cp -a "${REPO_ROOT}/common/extensions/." "${BUILD}/userpatches/extensions/"
-    echo "  synced common/extensions/ ($(find "${REPO_ROOT}/common/extensions" -type f | wc -l | tr -d ' ') files)"
+    purge_macos_metadata "${BUILD}/userpatches/extensions"
+    echo "  synced common/extensions/ ($(find "${REPO_ROOT}/common/extensions" -type f ! -name '.DS_Store' ! -name '._*' | wc -l | tr -d ' ') files)"
 fi
 
 echo "==> 完成"
