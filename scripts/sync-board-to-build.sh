@@ -49,13 +49,15 @@ sync_subdir config
 sync_subdir patch
 sync_subdir userpatches
 
-# 公共扩展 (common/extensions/*.sh) —— 所有板卡共享, 例如 mesa-vpu
-# 框架按名字解析: ENABLE_EXTENSIONS=mesa-vpu -> userpatches/extensions/mesa-vpu.sh
+# 公共扩展 (common/extensions/*.sh) —— 所有板卡共享, 例如 rkmpp-mpv / chromium-rkmpp
+# 框架按名字解析: ENABLE_EXTENSIONS=chromium-rkmpp -> userpatches/extensions/chromium-rkmpp.sh
+# _archive/ 是历史版本归档（不参与构建），不同步，避免 ENABLE_EXTENSIONS 误启用。
 if [[ -d "${REPO_ROOT}/common/extensions" ]]; then
     mkdir -p "${BUILD}/userpatches/extensions"
     cp -a "${REPO_ROOT}/common/extensions/." "${BUILD}/userpatches/extensions/"
+    rm -rf "${BUILD}/userpatches/extensions/_archive"
     purge_macos_metadata "${BUILD}/userpatches/extensions"
-    echo "  synced common/extensions/ ($(find "${REPO_ROOT}/common/extensions" -type f ! -name '.DS_Store' ! -name '._*' | wc -l | tr -d ' ') files)"
+    echo "  synced common/extensions/ ($(find "${REPO_ROOT}/common/extensions" -maxdepth 1 -mindepth 1 -not -name '_archive' -not -name '.DS_Store' -not -name '._*' | wc -l | tr -d ' ') entries)"
 fi
 
 echo "==> 完成"

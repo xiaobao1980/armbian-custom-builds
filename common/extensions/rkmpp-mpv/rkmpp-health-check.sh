@@ -136,7 +136,7 @@ if pgrep -x Xorg >/dev/null 2>&1; then
 elif pgrep -x Xwayland >/dev/null 2>&1; then
     WAYLAND_PID=$(pgrep -x Xwayland | head -1)
     XSERVER=wayland
-    warn "Only Xwayland 运行中（Wayland 会话）" "rkmpp X11 零拷贝路径不适用，应改用 mesa-vpu"
+    warn "Only Xwayland 运行中（Wayland 会话）" "rkmpp X11 零拷贝路径不适用；网页硬解请用 chromium-rkmpp 的镜像"
 else
     warn "未检测到 Xorg / Xwayland" "无图形会话，播放实测将跳过"
 fi
@@ -431,7 +431,7 @@ if [ "$DO_PLAY" -eq 0 ]; then
 elif [ -z "$MPV" ]; then
     warn "跳过播放实测" "mpv 未安装"
 elif [ "$XSERVER" != "x11" ]; then
-    warn "跳过播放实测" "需要 X11 会话（当前 ${XSERVER:-无}）；Wayland 请用 mesa-vpu 路线"
+    warn "跳过播放实测" "需要 X11 会话（当前 ${XSERVER:-无}）；Wayland 下请改用 chromium-rkmpp 的网页硬解路线"
 elif [ -z "$DESK_USER" ]; then
     warn "跳过播放实测" "未确定桌面用户"
 else

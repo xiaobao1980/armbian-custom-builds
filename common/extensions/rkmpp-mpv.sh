@@ -43,21 +43,26 @@
 #    * BRANCH=vendor 且 LINUXFAMILY=rk35xx / rockchip-rk3588（BSP 内核带 rkmpp 驱动）
 #    * 非 minimal 镜像
 #    * ARCH=arm64
-#    * 且未命中「mesa-vpu 选路」（见下）
 #
 # =============================================================================
-#  扩展选路规则（本仓约定，2026-10-30）—— 本扩展负责「其它」
+#  与 chromium-rkmpp.sh 的关系（2026-11-02 重构后）
 # -----------------------------------------------------------------------------
-#    GNOME/Wayland 桌面 + RELEASE=jammy|noble  ->  mesa-vpu.sh（PPA 栈，零编译）
-#    其它一切（X11 桌面 / Debian 系 / server）   ->  本扩展（自编译 RKMPP 栈）
+#  本扩展负责 **mpv 这半边**：自编译 mpv/ffmpeg-rockchip（/usr/local 隔离 + rpath，
+#  drm_prime 零拷贝）+ 强制 X11 + CMA 兜底。
+#  网页视频硬解由 chromium-rkmpp.sh 负责（PPA + pin 1002 + chromium 132/126+rkmpp）。
 #
-#  判定在 _rkmpp_mpv__defer_to_mesa_vpu()，与 mesa-vpu.sh 的 _mesa_vpu__selected()
-#  是同一判据的正反两面：两边可以同时写进 ENABLE_EXTENSIONS，只会有一个真正生效。
-#  ⚠️ 修改任一侧必须同步另一侧，否则会双开（PPA 栈 + 自编译栈混装）或双关（都不装）。
+#  两者**互不排斥，也不需要任何开关**：chromium-rkmpp 只碰 apt 源与 chromium、
+#  不做整机 dist-upgrade，因此不会动本扩展依赖的系统库（libplacebo/libass/libdav1d）。
+#  X11 镜像同时写进 ENABLE_EXTENSIONS 即为「一块板两件事都要」：
+#    本地 4K 零拷贝播放(mpv) + 网页视频硬解(chromium)。
 #
-#  为何 jammy 一律让位：mpv 0.41 硬依赖 libplacebo >= 6.338.2，jammy 自带 4.x，
-#  自编译必失败（本扩展失败会 exit 1 中止镜像构建）。jammy 请走 mesa-vpu 的 PPA 栈；
-#  若某 X11 桌面确实要用 PPA，设 MESA_VPU_FORCE=yes 即可（本扩展自动让位）。
+#  旧的 mesa-vpu.sh 选路 / 让位 / RKMPP_DUAL_STACK 双栈机制已整体废弃：
+#  那是为了绕开老 mesa-vpu 的 `dist-upgrade --allow-downgrades`（会换掉 mpv 动态
+#  依赖的库版本 → 构建 success 但播放器报废）。现在那个动作已被删除，互斥理由消失。
+#
+#  唯一保留的让位是 **jammy**：mpv 0.41 硬依赖 libplacebo >= 6.338.2，jammy 自带 4.x，
+#  自编译必失败（脚本会 exit 1 中止镜像构建）。jammy 上本扩展直接跳过并提示：
+#  网页硬解仍由 chromium-rkmpp 提供，本地播放走发行版 mpv（软解）。
 # =============================================================================
 #
 #  可选环境变量:
@@ -72,29 +77,17 @@
 #    6. 桌面会话强制 X11（gdm3/sddm）+ modesetting TearFree
 # =============================================================================
 
-# 本扩展是否应当让位给 mesa-vpu（与 common/extensions/mesa-vpu.sh 的
-# _mesa_vpu__selected() 严格互补；两边同改，勿单独调整）
-function _rkmpp_mpv__defer_to_mesa_vpu() {
-	# mesa-vpu 只处理 jammy / noble；其它发行版一律由本扩展接手
-	[[ "${RELEASE:-}" =~ ^(jammy|noble)$ ]] || return 1
-
-	# minimal 镜像：mesa-vpu 不装，本扩展也不装（下面各自有自己的 minimal 守卫）
-	[[ "${BUILD_MINIMAL:-}" == "yes" ]] && return 1
-
-	# 强制走 PPA 栈（含 X11 桌面）
-	[[ "${MESA_VPU_FORCE:-no}" == "yes" ]] && return 0
-
-	# server/CLI：mesa-vpu 不接管，本扩展接手（只装解码栈，不动显示管理器）
-	[[ "${BUILD_DESKTOP:-}" == "yes" ]] || return 1
-
-	# jammy 只能走 PPA（libplacebo 过旧，自编译 mpv 必失败）
-	[[ "${RELEASE}" == "jammy" ]] && return 0
-
-	# noble：Wayland 能力桌面归 mesa-vpu，X11 桌面归本扩展
-	case "${DESKTOP_ENVIRONMENT:-}" in
-		gnome | kde-plasma | budgie) return 0 ;;
-		*) return 1 ;;
-	esac
+# jammy 无法自编译 mpv —— 唯一保留的「跳过」判定
+#
+# mpv 0.41 硬依赖 libplacebo >= 6.338.2（jammy 4.x / bookworm 5.229 都不满足），
+# 自带构建脚本在 libplacebo 版本检查处会 exit 1 主动中止（故意的：不交付硬解失效的镜像）。
+# 已在 线上验证可行的发行版：trixie 7.349 ✓ / noble 6.338.2 ✓。
+#
+# jammy 上网页硬解仍由 chromium-rkmpp.sh 提供（PPA chromium 126+rkmpp）；
+# 本地播放只能走发行版 mpv（软解）。要 mpv 硬解请改 RELEASE=noble|trixie。
+function _rkmpp_mpv__cannot_build_mpv() {
+	[[ "${RELEASE:-}" == "jammy" ]] && return 0
+	return 1
 }
 
 function extension_prepare_config__rkmpp_mpv() {
@@ -110,17 +103,17 @@ function extension_prepare_config__rkmpp_mpv() {
 		return 0
 	fi
 
-	# 该组合由 mesa-vpu 接管，本扩展让位（避免 PPA 栈与自编译栈混装 / X11 强制打架）
-	if _rkmpp_mpv__defer_to_mesa_vpu; then
+	# jammy 编译不出 mpv 0.41（libplacebo 4.x）：显式跳过并说清楚另一半在哪
+	if _rkmpp_mpv__cannot_build_mpv; then
 		display_alert "Extension: ${EXTENSION}" \
-			"defer to mesa-vpu for ${RELEASE}/${DESKTOP_ENVIRONMENT:-no-desktop} (Wayland + PPA stack)" "info"
+			"skip: ${RELEASE} 自带 libplacebo < 6.338.2，mpv 0.41 无法编译。网页硬解仍由 chromium-rkmpp 提供；本地播放走发行版 mpv（软解）。要 mpv 硬解请改 RELEASE=noble|trixie" "warn"
 		return 0
 	fi
 
 	# 预检：libplacebo >= 6.338.2 是 mpv 0.41 的硬依赖，自带的 rk35xx-rkmpp-mpv-build.sh
 	# 在版本不足处会 exit 1（故意中止，避免交付硬解失效的镜像）。已知不满足的发行版
 	# 在这里就喊出来，省掉 2-3 小时后才变红。
-	#   对照: trixie 7.349 ✓ / noble 6.338.2 ✓ / bookworm 5.229 ✗ / jammy ✗(已让位 mesa-vpu)
+	#   对照: trixie 7.349 ✓ / noble 6.338.2 ✓ / bookworm 5.229 ✗ / jammy ✗(上面已跳过)
 	case "${RELEASE}" in
 		bookworm | bullseye | buster | focal)
 			display_alert "Extension: ${EXTENSION}" \
@@ -140,9 +133,9 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	if [[ "${BUILD_MINIMAL}" == "yes" ]]; then
 		return 0
 	fi
-	# 与 extension_prepare_config 同一让位判定（此处再判一次是硬保险：
-	# 即使 prepare 阶段被跳过，也绝不能在 mesa-vpu 的地盘上再自编译一套栈）
-	if _rkmpp_mpv__defer_to_mesa_vpu; then
+	# 与 extension_prepare_config 同一跳过判定（此处再判一次是硬保险：
+	# 即使 prepare 阶段被跳过，也不能白跑 40 分钟编译再让构建脚本 exit 1）
+	if _rkmpp_mpv__cannot_build_mpv; then
 		return 0
 	fi
 

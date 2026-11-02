@@ -5,9 +5,15 @@ name: Build Armbian Image (Wayland 定制版)
 # -----------------------------------------------------------------------------
 #  固定策略（评测点，不可覆盖）：
 #    · 桌面必须是支持 Wayland 的会话：gnome / kde-plasma / budgie
-#    · 硬解栈走 mesa-vpu（amazingfated rockchip-multimedia PPA + panthor-gpu overlay，
-#      零编译）。⚠️ 该 PPA 只发布 jammy / noble —— trixie/bookworm 上 mesa-vpu 会
-#      自动跳过、镜像里就没有硬解栈，所以默认直接拦下来（可用 allow_no_hwdec 放行）。
+#    · 网页硬解走 chromium-rkmpp（rockchip-multimedia PPA + pin1002 + chromium 132/126+rkmpp）。
+#      ⚠️ 该 PPA 只发布 jammy / noble —— trixie/bookworm 上该扩展会自动跳过、
+#      镜像里没有网页硬解；默认放行（allow_no_hwdec=true）以便出纯桌面/中文镜像。
+#    · mesa 运行时 / panthor-gpu overlay / PPA 基础多媒体包由 armbian 主线的
+#      armbian-configng module_desktops 在 rootfs 装配期完成（上游 2026-05-09 已把
+#      旧 extensions/mesa-vpu.sh 的这部分职责迁过去并删除该扩展）；本仓只补它没做的
+#      「出厂即把 chromium 换成 +rkmpp 版」这一步，见 common/extensions/chromium-rkmpp.sh。
+#    · 中文环境对所有发行版默认开启（jammy/noble 走 language-pack-*；
+#      trixie/bookworm 走 locales-all + 发行版自带翻译 + Noto CJK + AccountsService 会话语言）
 #    · 显示管理器按 Wayland 会话配置（gdm3 → WaylandEnable=true，覆盖 rkmpp-mpv 的强制 X11）
 #    · 不启用 rkmpp-mpv（它是 X11 专用栈，在 Wayland 下 mpv 拿不到 rkmpp 后端）
 #  可配置：板卡 / 发行版 / 桌面 / 默认用户（用户名·密码·root 密码·附加组·
@@ -96,16 +102,16 @@ on:
         default: true
 
       chinese:
-        description: "中文环境 (locale/字体/输入法/Chromium 中文化; 需 rk35xx vendor 内核)"
+        description: "中文环境 (所有发行版默认开启: locale/时区/字体/输入法/Chromium 中文化/AccountsService 会话语言)"
         type: boolean
         required: false
         default: true
 
       allow_no_hwdec:
-        description: "允许在无硬解栈的发行版上继续构建 (trixie/bookworm 上 PPA 不可用)"
+        description: "无硬解栈的发行版也继续构建 (默认开启, 便于 trixie/bookworm 出中文桌面镜像; 关闭则遇到无硬解发行版直接中止)"
         type: boolean
         required: false
-        default: false
+        default: true
 
       compress:
         description: "镜像压缩格式"
@@ -255,13 +261,16 @@ jobs:
           TIER_FINAL="${IN_TIER}"
           BRANCH_FINAL="${BRANCH}"
 
-          # Wayland 版只走 mesa-vpu；显式剔除 rkmpp-mpv（X11 专用栈，会强制
+          # Wayland 版只走 chromium-rkmpp；显式剔除 rkmpp-mpv（X11 专用栈，会强制
           # WaylandEnable=false 且 mpv 在 Wayland 无 rkmpp 后端）
           EXT=""
           add_ext() { case ",${EXT}," in *",$1,"*) ;; *) EXT="${EXT:+${EXT},}$1" ;; esac; }
           [ -n "${IN_USER}" ] && add_ext default-user
           [ "${IN_CHINESE}" = "true" ] && add_ext rk35xx-chinese-desktop
-          add_ext mesa-vpu
+          add_ext chromium-rkmpp
+          # 兜底补 display-manager.service：chroot 里 deb-systemd-helper 只建 .wants，
+          # 不建这个 Alias → gdm 路线会停在文字控制台（187 实测，见扩展头注释）
+          add_ext desktop-dm
 
           case "${IN_COMPRESS}" in
             7z)   COMPRESS="sha,img,7z" ;;
@@ -285,6 +294,51 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           echo "构建参数: ${ARGS}"
+
+      # 为什么要单独写文件：compile.sh 以非 root 启动时会 `exec sudo --preserve-env
+      # <白名单>` 重启自己（lib/functions/cli/utils-cli.sh），普通 env 全被丢弃 ——
+      # 只靠 step 的 env: 传 DEFAULT_USER_NAME，扩展读到时是空的，会静默跳过建用户。
+      # 文件通道不进 CLI 参数（不污染日志/进程列表），扩展读取后立刻删除。
+      - name: 准备构建期用户凭据 (文件通道, 规避 sudo 环境白名单)
+        # 扩展以 DEFAULT_USER_NAME 为总开关：没有用户名时连 root 密码也不处理，故这里同条件
+        if: ${{ inputs.user_name != '' }}
+        env:
+          IN_USER: ${{ inputs.user_name }}
+          IN_UPASS: ${{ inputs.user_password }}
+          IN_RPASS: ${{ inputs.root_password }}
+          IN_GROUPS: ${{ inputs.user_groups }}
+          IN_NOPASSWD: ${{ inputs.sudo_nopasswd }}
+          IN_AUTOLOGIN: ${{ inputs.desktop_autologin }}
+        run: |
+          set -euo pipefail
+          DEST="armbian-build/userpatches/.default-user.env"
+          mkdir -p "$(dirname "${DEST}")"
+          umask 077
+          : > "${DEST}"
+          {
+            printf 'DEFAULT_USER_NAME=%q\n' "${IN_USER}"
+            printf 'DEFAULT_USER_PASSWORD=%q\n' "${IN_UPASS}"
+            printf 'DEFAULT_USER_SHELL=%q\n' "/bin/bash"
+            printf 'DEFAULT_DESKTOP_SESSION_TYPE=%q\n' "wayland"
+            if [ "${IN_NOPASSWD}" = "true" ]; then
+              printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "yes"
+            else
+              printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "no"
+            fi
+            if [ "${IN_AUTOLOGIN}" = "true" ]; then
+              printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "yes"
+            else
+              printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "no"
+            fi
+            if [ -n "${IN_GROUPS}" ]; then
+              printf 'DEFAULT_USER_GROUPS=%q\n' "${IN_GROUPS}"
+            fi
+            if [ -n "${IN_RPASS}" ]; then
+              printf 'DEFAULT_ROOT_PASSWORD=%q\n' "${IN_RPASS}"
+            fi
+          } >> "${DEST}"
+          chmod 600 "${DEST}"
+          echo "::notice::用户凭据已写入 userpatches/.default-user.env (0600)，扩展读取后即删除"
 
       - name: 预检 (Wayland 硬解栈可用性)
         run: |
@@ -310,25 +364,35 @@ jobs:
           case "${FAMILY}" in
             rk35xx|rockchip-rk3588) ;;
             *)
-              echo "::error::${FAMILY} 不是 rk35xx/rockchip-rk3588 家族：mesa-vpu 的 panthor-gpu overlay / rockchip-multimedia PPA 都要求厂商内核。请改用标准版或 X11 定制版。"
+              echo "::error::${FAMILY} 不是 rk35xx/rockchip-rk3588 家族：chromium-rkmpp 与 configng 的 rockchip-multimedia / panthor-gpu 都要求厂商内核。请改用标准版或 X11 定制版。"
               exit 1
               ;;
           esac
 
-          # mesa-vpu 只在 jammy/noble 有 PPA；其余发行版它会自动跳过 -> 镜像无硬解
+          # chromium+rkmpp 只在 PPA 的 jammy/noble；其余发行版该扩展自动跳过 -> 无网页硬解
           case "${REL}" in
-            jammy | noble)
-              echo "硬解栈: mesa-vpu（rockchip-multimedia PPA + panthor-gpu overlay，零编译）"
+            noble)
+              echo "硬解栈: configng(PPA+panthor) + chromium-rkmpp（chromium 132+rkmpp，出厂即硬解）"
+              ;;
+            jammy)
+              echo "硬解栈: chromium-rkmpp（chromium 126+rkmpp；jammy 无 panthor overlay，GPU 走发行版 mesa）"
               ;;
             *)
               if [ "${{ inputs.allow_no_hwdec }}" = "true" ]; then
-                echo "::warning::${REL} 上 mesa-vpu 会自动跳过（PPA 只发布 jammy/noble）—— 本镜像将**不含硬解栈**，仅供桌面/中文环境验证。"
+                echo "::warning::${REL} 上 chromium-rkmpp 会自动跳过（PPA 只发布 jammy/noble）—— 本镜像**不含网页硬解**，但桌面/中文环境/输入法完整可用。"
               else
-                echo "::error::${REL} 上没有 Wayland 硬解路径：mesa-vpu 的 PPA 只发布 jammy/noble。请把 release 改成 noble（或 jammy）；确实只要桌面不要硬解，请勾选 allow_no_hwdec。"
+                echo "::error::${REL} 上没有网页硬解路径：chromium-rkmpp 的 PPA 只发布 jammy/noble。请把 release 改成 noble（或 jammy）；若只要桌面+中文环境，请保持 allow_no_hwdec 开启（默认已开启）。"
                 exit 1
               fi
               ;;
           esac
+
+          # 中文环境：所有发行版默认生效（Ubuntu 走 language-pack-*，Debian 走 locales-all + 自带翻译）
+          if [ "${{ inputs.chinese }}" = "true" ]; then
+            echo "中文环境: 开启（${REL}，Ubuntu/Debian 自适应，含 AccountsService 会话语言）"
+          else
+            echo "中文环境: 关闭（镜像为英文界面）"
+          fi
 
           case "${DE}" in
             gnome | kde-plasma | budgie) ;;
@@ -344,7 +408,7 @@ jobs:
             发行版      : ${{ steps.args.outputs.release }}   (分支 ${{ steps.args.outputs.branch }})
             桌面        : ${{ steps.args.outputs.desktop }} / 档位 ${{ inputs.desktop_tier }}
             默认用户    : ${{ inputs.user_name }}   (sudo免密=${{ inputs.sudo_nopasswd }}, 自动登录=${{ inputs.desktop_autologin }})
-            中文环境    : ${{ inputs.chinese }}
+            中文环境    : ${{ inputs.chinese }}   (所有发行版默认开启)
             扩展        : ${{ steps.args.outputs.extensions }}
             压缩        : ${{ inputs.compress }}
           ────────────────────────────────────────────────
@@ -375,6 +439,11 @@ jobs:
             SHARE_LOG=yes \
             COMPRESS_OUTPUTIMAGE=${{ steps.args.outputs.compress }} \
             build
+
+      # 双保险：扩展读后已自删；这里兜住「扩展没跑到/编译中途失败」的残留
+      - name: 清理用户凭据文件 (无论成败)
+        if: always()
+        run: rm -f armbian-build/userpatches/.default-user.env && echo "凭据文件已清理"
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4
@@ -427,7 +496,7 @@ jobs:
           | 默认用户 | \`${USER_NAME}\` |
           | 桌面自动登录 | ${{ inputs.desktop_autologin }} |
           | 中文环境 | ${{ inputs.chinese }} |
-          | 硬解栈 | mesa-vpu（rockchip-multimedia PPA，仅 jammy/noble 有效） |
+          | 硬解栈 | chromium-rkmpp（chromium 132/126+rkmpp，仅 jammy/noble 有效）+ configng mesa/panthor |
           | 构建参数 | \`${BUILD_ARGS}\` |
           | 构建时间 (UTC) | $(date -u '+%Y-%m-%d %H:%M') |
 

@@ -33,6 +33,39 @@
 #       避免 shell 注入（CI 侧同样做一层校验，双保险）。
 # =============================================================================
 
+# ---------------------------------------------------------------- 凭据来源
+# ⚠️ 为什么需要文件通道（187 实测，2026-11-02）：
+#   compile.sh 以非 root 启动时，会用
+#     exec sudo --preserve-env "${ARMBIAN_CLI_FINAL_RELAUNCH_ENVS[@]}" bash compile.sh ...
+#   重新拉起自己（lib/functions/cli/utils-cli.sh:355）。该白名单只含
+#   ARMBIAN_ORIGINAL_BUILD_UUID / ARMBIAN_HIDE_REPEAT_PARAMS / ARMBIAN_CLI_RELAUNCH_ENVS，
+#   **普通环境变量一律被 sudo 丢弃**。所以 CI 里 `env: DEFAULT_USER_NAME=...` 传到扩展时
+#   已经是空的 → _default_user_enabled 判否 → 静默跳过 → 镜像里零个普通用户
+#   （187 的「不进桌面」缺陷 B 就是这个）。
+#   同理走 Docker 分支时，只有显式 -e 的变量才进容器。
+#
+#   因此 CI 改由 **文件** 传凭据：构建前写 ${SRC}/userpatches/.default-user.env（0600），
+#   这里 source 一次后立刻删除 —— 既不进 CLI 参数（不污染日志/进程列表），
+#   也不受 sudo 白名单影响。本地构建仍可直接用环境变量或板卡 config，两者兼容。
+_default_user_load_file() {
+	[[ "${_DEFAULT_USER_FILE_LOADED:-no}" == "yes" ]] && return 0
+	_DEFAULT_USER_FILE_LOADED=yes
+
+	local f="${SRC:-}/userpatches/.default-user.env"
+	[[ -n "${SRC:-}" && -r "${f}" ]] || return 0
+
+	# shellcheck disable=SC1090
+	set -a
+	source "${f}"
+	set +a
+
+	display_alert "Extension: ${EXTENSION}" "已从 userpatches/.default-user.env 载入用户凭据（sudo 环境白名单会丢弃 env，故走文件）" "info"
+
+	# 用后即毁：不在构建目录/缓存里留明文密码（CI 侧另有 always() 清理兜底）
+	rm -f "${f}" 2>/dev/null || true
+	return 0
+}
+
 # 默认附加组（组不存在会自动跳过，不会因某发行版缺组而失败）
 _default_user_groups() {
 	printf '%s' "${DEFAULT_USER_GROUPS:-sudo,adm,audio,video,plugdev,netdev,render,input,dialout,cdrom}"
@@ -40,11 +73,14 @@ _default_user_groups() {
 
 # 本扩展是否启用：不设用户名即整体跳过
 _default_user_enabled() {
+	_default_user_load_file
 	[[ -n "${DEFAULT_USER_NAME:-}" ]]
 }
 
 # 输入校验：非法输入直接中止构建（比起交付一个「没建出用户」的镜像要好）
 _default_user_validate() {
+	# 幂等：文件通道可能在 enabled 判定时已加载过
+	_default_user_load_file
 	local err=0
 
 	if ! [[ "${DEFAULT_USER_NAME}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then

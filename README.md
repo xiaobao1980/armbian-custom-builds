@@ -24,13 +24,19 @@ boards/<board>/
 └── reference/             # 参考源文件（不参与构建同步）
 
 common/extensions/
-├── mesa-vpu.sh            # 公共扩展：jammy|noble + GNOME/Wayland 桌面 → mesa/panthor/
-│                          # rockchip-multimedia PPA + 浏览器（与 rkmpp-mpv 自动二选一）
-├── rkmpp-mpv.sh           # 公共扩展：其它组合 → RKMPP + mpv 硬解 + 全局非 Wayland (X11)
-│                          # （两者可同开，判定互补，详见「硬解栈选路」专节）
-└── rk35xx-chinese-desktop.sh          # 公共扩展：RK35xx 中文桌面通用设置
-    └── chinese-desktop/               #   （用户/locale/时区/字体/输入法/Chromium/DTB 过滤,
-        └── rk35xx-chinese-desktop.sh  #    ENABLE_EXTENSIONS=rk35xx-chinese-desktop）
+├── rkmpp-mpv.sh           # 公共扩展：mpv 那半边 —— 自编译 RKMPP + mpv 硬解 + 全局非 Wayland (X11)
+├── chromium-rkmpp.sh      # 公共扩展：网页那半边 —— 出厂即 chromium +rkmpp（PPA + pin1002）
+│                          # （两者互不排斥，可同开 = 一块板两件事都要，详见「硬解栈组合」专节）
+├── rk35xx-chinese-desktop.sh          # 公共扩展：RK35xx 中文桌面通用设置
+│   └── chinese-desktop/               #   （用户/locale/时区/字体/输入法/Chromium/DTB 过滤,
+│       └── rk35xx-chinese-desktop.sh  #    ENABLE_EXTENSIONS=rk35xx-chinese-desktop）
+├── default-user.sh        # 公共扩展：构建期建默认用户 + 可选 DM 自动登录
+│                          # （CI 用 userpatches/.default-user.env 文件传凭据，见下）
+├── desktop-dm.sh          # 公共扩展：补 display-manager.service（chroot 里 gdm 缺这个 Alias
+│                          #   → 烧卡停在文字控制台，187 实测；幂等，非桌面镜像自动跳过）
+└── _archive/
+    └── mesa-vpu.sh.obsolete           # 归档：上游 armbian/build 已于 2026-05-09 删除该扩展
+                                       # （职责迁至 armbian-configng），本仓不再引用
 
 docs/
 └── Debian_X11_RKMPP_MPV_Guide.md   # RKMPP+mpv 完整原理/手册（扩展的上游参考）
@@ -84,7 +90,13 @@ Actions 页面两个入口：
 | Build Armbian Image (单板) | `build-image.yml` | 全部可调（标准版） | 通用构建 |
 | Build All Boards (矩阵) | `build-all.yml` | 各板 `build.env` | 批量出图 |
 | **Build Armbian Image (X11 定制版)** | `build-x11.yml` | 桌面强制 X11（xfce/cinnamon/mate/lxqt/i3-wm）+ 硬解走 `rkmpp-mpv`（mpv/ffmpeg-rockchip 零拷贝）+ gdm3 `WaylandEnable=false` | neardi-lz200 / trixie 这类已验证的 X11 硬解板 |
-| **Build Armbian Image (Wayland 定制版)** | `build-wayland.yml` | 桌面强制 Wayland（gnome/kde-plasma/budgie）+ 硬解走 `mesa-vpu`（rockchip-multimedia PPA，零编译）+ gdm3 `WaylandEnable=true`；**不启用** `rkmpp-mpv` | h96s / noble 这类 Wayland 板 |
+| **Build Armbian Image (Wayland 定制版)** | `build-wayland.yml` | 桌面强制 Wayland（gnome/kde-plasma/budgie）+ 网页硬解走 `chromium-rkmpp`（rockchip-multimedia PPA + pin1002，出厂即 +rkmpp 版）+ gdm3 `WaylandEnable=true`；**不启用** `rkmpp-mpv` | h96s / noble 这类 Wayland 板 |
+
+> 🀄 **中文环境默认开启**：两个定制版的 `chinese` 都是 `default: true`，且**对所有发行版生效**
+> （jammy/noble 走 `language-pack-*`，trixie/bookworm 走 `locales-all` + 包自带翻译；逐包安装，
+> 单包缺失不拖垮整条 apt 事务），并写 AccountsService `Language=zh_CN.UTF-8`
+> （GNOME/GDM 只认这个，不认 `/etc/default/locale` —— 187 实测「系统中文、桌面英文」的根因）。
+> 要纯英文镜像时把 `chinese` 取消勾选即可。
 
 两者都额外提供**默认用户设置**（由公共扩展 `common/extensions/default-user.sh` 在构建期 chroot 内落盘，不依赖首启 rc.local 时序）：
 
@@ -97,56 +109,69 @@ Actions 页面两个入口：
 | `sudo_nopasswd` | `true` | 写入 `/etc/sudoers.d/90-<user>`（`visudo -cf` 校验失败会自动删除） |
 | `desktop_autologin` | `true` | lightdm / gdm3 / sddm 均支持；烧卡开机直接进桌面 |
 
-落地痕迹（镜像内，**不含密码**）：`/etc/default-user.conf`（用户/组/免密/自动登录开关）、`/etc/default-user.autologin`（实际 DM 与会话名）。
+落地痕迹（镜像内，**不含密码**）：`/etc/default-user.conf`（用户/组/免密/自动登录开关）、`/etc/default-user.autologin`（实际 DM 与会话名）、`/etc/desktop-dm.conf`（DM/unit/是否自愈过）。
 
-> 🔐 密码经**环境变量**传给构建框架（不拼进 `compile.sh` 命令行），因此不会出现在 Armbian 的 `Applying cmdline param` 日志里；workflow 侧另有 `::add-mask::` 与字符集白名单双保险。
+> 🔐 **凭据怎么进构建（2026-11-02 更正）**：`compile.sh` 以非 root 启动时会
+> `exec sudo --preserve-env <白名单> bash compile.sh ...` 重启自己（`lib/functions/cli/utils-cli.sh:355`），
+> 白名单只含 `ARMBIAN_ORIGINAL_BUILD_UUID` / `ARMBIAN_HIDE_REPEAT_PARAMS` / `ARMBIAN_CLI_RELAUNCH_ENVS`
+> —— **普通环境变量一律被 sudo 丢弃**。所以 CI 里 `env: DEFAULT_USER_NAME=...` 到扩展手上是空的，
+> 扩展静默跳过 → 镜像零个普通用户（187 的「不进桌面」缺陷 B）。
+> 现改为文件通道：args step 先校验 → 写 `armbian-build/userpatches/.default-user.env`（0600，不进命令行）→
+> 扩展 source 一次后立刻删除 → 编译 step 后 `always()` 再兜底清理。密码既不进日志、也不留在构建目录。
+> 本地构建仍可直接用环境变量 / 板卡 config，两者兼容。
 
-> ⚠️ **Wayland 定制版的硬解前提**：`mesa-vpu` 的 PPA 只发布 `jammy` / `noble`。选 `trixie` / `bookworm` 时 `mesa-vpu` 会自动跳过（镜像无硬解栈），预检步骤默认**直接拦下**；确实只要桌面不要硬解时才勾 `allow_no_hwdec`。
+> 🖥️ **display-manager 自愈（缺陷 A）**：chroot 里装 gdm3 时，`deb-systemd-helper` 只建 `.wants`，
+> **不建** `/etc/systemd/system/display-manager.service` 这个 Alias（正常由 `systemctl enable` 在真机上创建）。
+> 结果 `graphical.target → Wants=display-manager.service → 缺失`，开机会停在文字控制台；XFCE/lightdm 自带该链接，所以只有 GNOME/gdm 路线暴露。
+> `common/extensions/desktop-dm.sh` 在定制链最后补这一环（`systemctl --root` 优先、手工链接兜底、幂等），
+> 两个定制版 workflow 都启用。
+
+> ⚠️ **Wayland 定制版的硬解前提**：`chromium-rkmpp` 用的 PPA 只发布 `jammy` / `noble`。选 `trixie` / `bookworm` 时该扩展会自动跳过（镜像无网页硬解），预检步骤默认**直接拦下**；确实只要桌面不要硬解时才勾 `allow_no_hwdec`（默认已开）。
 
 > ⚠️ **X11 定制版的预编译 deb**：`rkmpp-stack_*.deb` 的 build-info 写死 `DISTRO_CODENAME=trixie`，目标不是 trixie 时扩展会回退 chroot 源码编译（qemu 下极易撞 6h 上限），预检步骤会提前 `::warning::`。
 
 
-## 硬解栈选路：mesa-vpu / rkmpp-mpv（自动二选一）
+## 硬解栈组合：rkmpp-mpv + chromium-rkmpp（互不排斥）
 
-**规则（唯一判据）：**
+两块扩展解决两件不同的事，**可以同时启用，也可以单独启用**：
 
-| 条件 | 生效扩展 | 说明 |
+| 扩展 | 负责 | 生效条件 | 不生效时 |
+|---|---|---|---|
+| `rkmpp-mpv` | 本地播放：自编译 MPP+RGA+ffmpeg-rockchip+mpv 0.41（drm_prime 零拷贝）+ 强制 X11 + CMA 兜底 | vendor 内核 + rk35xx/rk3588 + 非 minimal + **非 jammy**（libplacebo 4.x 编不出 mpv 0.41） | 本地播放走发行版 mpv（软解） |
+| `chromium-rkmpp` | 网页视频：PPA 的 chromium `+rkmpp`（noble=132 / jammy=126）+ pin1002 + `libv4l-rkmpp` + `/dev/video-dec0` | vendor 内核 + 桌面镜像 + arm64/armhf + **jammy 或 noble** | 网页视频走 `FFmpegVideoDecoder`（软解） |
+
+**两条硬解链互不干扰**：`chromium-rkmpp` 只碰 apt 源与 chromium，不做整机 `dist-upgrade`，因此不会动 mpv 依赖的 `libplacebo/libass/libdav1d`。曾经存在的「二选一 / 双栈开关」机制已整体废弃 —— 那是为了绕开老 `mesa-vpu` 的整机降级动作。
+
+组合矩阵（`X11 定制版` 两个扩展都启用，`Wayland 定制版` 只启用 `chromium-rkmpp`）：
+
+| 发行版 | mpv 本地硬解 | 网页硬解 |
 |---|---|---|
-| `RELEASE=jammy\|noble` + 桌面镜像 + Wayland 能力桌面（`gnome` / `kde-plasma` / `budgie`） | **`mesa-vpu`** | PPA 栈（`liujianfeng1994/rockchip-multimedia`），零编译、镜像小 ~57MB |
-| `RELEASE=jammy` + 任意桌面 | **`mesa-vpu`** | jammy 自带 libplacebo 4.x < 6.338.2，自编译 mpv 必失败，只能走 PPA |
-| 其它（noble + X11 桌面 / `bookworm` / `trixie` / `resolute` / server） | **`rkmpp-mpv`** | 源码编译 MPP+RGA+ffmpeg-rockchip+mpv（+20–40 分钟） |
-
-两块扩展**可以同时写进 `ENABLE_EXTENSIONS`**，各自按实际参数判定，判定严格互补 —— 绝不会双开（PPA 栈与自编译栈混装）或双关（两条硬解路径都不装）。当前三块板均两者同开：
-
-| 板卡 | 默认组合 | 实际生效 |
-|---|---|---|
-| `h96s`（h96-m9） | noble + gnome | **mesa-vpu**（+ panthor overlay 仅 noble 加） |
-| `neardi-lz200` | trixie + xfce | **rkmpp-mpv**（强制 X11） |
-| `am60-sa12` | bookworm + server | **rkmpp-mpv**（跳过显示管理器配置） |
-| `aio-3288c` | noble + xfce（RK3288/armhf） | 两者都不适用：`LINUXFAMILY=rockchip` 不在 rkmpp 支持家族内，PPA 也没有 armhf 的 rk35xx 包。它单独启用板级内核扩展 `wk2xxx-aio3288c`（WK2124 SPI-4UART / RS232+RS485） |
-
-> ⚠️ `userpatches/extensions/*.sh` **不会**被自动加载：必须在 `build.env` / preset / 命令行里用 `ENABLE_EXTENSIONS=<名字>` 显式启用，且钩子函数必须是 `<hook>__<impl>` 双下划线形式（单写 `function <hook>()` 不会被调用）。`aio-3288c` 的 `wk2xxx-aio3288c` 曾因此完全失效（`CONFIG_SPI_WK2XXX` 从未被置 y → 板上没有任何 `ttyWK*`）。
-
-> 为什么不在 `build.env` 里写死某一个：CI 的 `build-image.yml` 允许覆盖 `release` / `desktop_environment`，写死就会在覆盖后选错（例如 h96s 选 `release=jammy` 或 `desktop_environment=xfce` 都应变路）。判定点分别在 `mesa-vpu.sh` 的 `_mesa_vpu__selected()` 与 `rkmpp-mpv.sh` 的 `_rkmpp_mpv__defer_to_mesa_vpu()`，**改一侧必须同步另一侧**。
+| `noble` | ✅ rkmpp-mpv | ✅ chromium 132+rkmpp |
+| `trixie` | ✅ rkmpp-mpv | ❌ Debian 侧 chromium 无 V4L2 VDA patch（死路） |
+| `jammy` | ❌ libplacebo 4.x | ✅ chromium 126+rkmpp |
+| `bookworm` | ❌ libplacebo 5.229 | ❌ |
 
 可覆盖变量：
 
 | 变量 | 作用 |
 |---|---|
-| `MESA_VPU_FORCE=yes` | 强制走 PPA 栈（例如 noble + X11 桌面不想等 40 分钟自编译）；`rkmpp-mpv` 自动让位 |
-| `MESA_VPU_PANTHOR=yes` | 非 noble 也加 `panthor-gpu` overlay（默认仅 noble：jammy 的 mesa 22.x 无 panthor 驱动） |
+| `CHROMIUM_RKMPP=no` | 关掉网页硬解扩展（`trixie`/`bookworm` 本来就会自动跳过） |
 | `RKMPP_MPV_SKIP_BUILD=yes` | 跳过自编译，只做 CMA/X11 兜底（软解基线排查） |
 | `RKMPP_MPV_PREBUILT=no` | 不用预编译 deb，强制源码编译 |
 
+> 📌 **为什么不再用上游的 mesa-vpu**：armbian/build 的 `extensions/mesa-vpu.sh` 已于 **2026-05-09 整文件删除**（commit `27c668343`，理由 "fully covered by armbian-config"），mesa 运行时 / `panthor-gpu` overlay / PPA 基础多媒体包在设计上改由 armbian-configng 的 `module_desktops` 接管。但两点让它不能直接依赖：① 删除提交自己写明 configng **不做**装机期的 `apt-get dist-upgrade --allow-downgrades`，**出厂镜像仍是 `apt.armbian.com` 的软解 chromium**，要等用户首次 `apt upgrade` 才换；② 本仓实测 `./compile.sh build` 里 configng 路径**并未运行**（实证见 `boards/h96s/config/boards/h96-m9.csc` 顶部第 2 条）。所以 `chromium-rkmpp.sh` 自己幂等补装 PPA/pin/`libv4l-rkmpp`/`rockchip-multimedia-config`，只补这个缺口；`panthor-gpu` overlay 默认不加（X11/panfrost 基线已验证，加 overlay 需 panthor-capable mesa，见扩展头注释）。旧的 293 行拷贝已归档到 `common/extensions/_archive/mesa-vpu.sh.obsolete`。
+
+> ⚠️ `userpatches/extensions/*.sh` **不会**被自动加载：必须在 `build.env` / preset / 命令行里用 `ENABLE_EXTENSIONS=<名字>` 显式启用（`chromium-rkmpp`、`rkmpp-mpv` 皆然），且钩子函数必须是 `<hook>__<impl>` 双下划线形式（单写 `function <hook>()` 不会被调用）。`aio-3288c` 的 `wk2xxx-aio3288c` 曾因此完全失效（`CONFIG_SPI_WK2XXX` 从未被置 y → 板上没有任何 `ttyWK*`）。
+
 ## 公共扩展：rkmpp-mpv（RKMPP 硬解 + 全局非 Wayland）
 
-所有 **vendor 内核**的 RK3566/RK3568/RK3576/RK3588 板卡默认启用（`ENABLE_EXTENSIONS` 里与 `mesa-vpu` 逗号连用，实际是否执行由上面的选路规则决定）。完整原理见 `docs/Debian_X11_RKMPP_MPV_Guide.md`。扩展按场景**自动选路**：
+所有 **vendor 内核**的 RK3566/RK3568/RK3576/RK3588 板卡默认启用（`ENABLE_EXTENSIONS` 里与 `chromium-rkmpp` 逗号连用；各自按发行版自动判定是否真正执行）。完整原理见 `docs/Debian_X11_RKMPP_MPV_Guide.md`。扩展按场景**自动选路**：
 
-**路径一：jammy|noble + 桌面 + mesa-vpu（PPA 栈，零编译）**
+**路径一：jammy（不自编译，网页硬解由 chromium-rkmpp 提供）**
 
-mesa-vpu 已启用的 amazingfated PPA（`liujianfeng1994/rockchip-multimedia`）里，ffmpeg 6.1.1 构建参数即带 `--enable-rkmpp --enable-rkrga`（changelog: "Add mpp patch from nyanmisaka"）。PPA 自己的 mpv 重打包（`0.36.0-1+j1`）现仅剩 jammy/armhf、noble 已下架，noble 上 apt 装 Ubuntu 官方 mpv 0.37 —— 但其动态链接 PPA 的 rkmpp 版 `libavcodec60`，`h264_rkmpp`/`hevc_rkmpp` 等 wrapper 解码器会被 mpv 动态注册为 hwdec 方法（mpv 从 libavcodec 枚举 `wrapper_name`），硬解可用。检测到该 PPA pin 时直接装 `mpv`/`ffmpeg`，跳过自编译（构建快 4 分钟、镜像小 ~57MB）。
+jammy 自带 libplacebo 4.x < 6.338.2，`rkmpp-mpv` 会直接跳过（否则构建脚本会 `exit 1` 中止镜像）。该发行版上：网页硬解走 `chromium-rkmpp`（PPA chromium 126+rkmpp），本地播放只能用发行版 mpv（软解）。PPA 里虽有 `mpv 0.36.0-1+j1`，但本仓**不安装**它（版本过旧、且会牵动 PPA 的 `libavcodec` 版本）—— 要 mpv 硬解请改 `noble` / `trixie`。
 
-**路径二：bookworm / server / 未启用 mesa-vpu（自编译栈）**
+**路径二：bookworm / trixie / noble / server（自编译栈）**
 
 按指南方案 A 在 chroot 内源码编译：
 
@@ -202,7 +227,7 @@ RK_CN_RIME_MIRROR=          # 可选：rime-ice 优先镜像前缀
 
 启用：`ENABLE_EXTENSIONS=...,rk35xx-chinese-desktop`。当前已接入 `h96s`（GNOME/Wayland→ibus-rime）、`neardi-lz200`（XFCE/X11→fcitx5-rime）与 `am60-sa12`（server，仅 locale/字体/用户）。
 
-> ⚠️ 与 `rkmpp-mpv` 的会话取向关系（已由选路规则自动处理）：`rkmpp-mpv` 会把 GNOME 强制成 X11（`WaylandEnable=false`）。按上表，**noble + GNOME/Wayland 由 `mesa-vpu` 接管、`rkmpp-mpv` 自动让位**，所以 h96s 仍是真正的 GNOME/Wayland + ibus-rime；只有落到 `rkmpp-mpv` 的组合（noble+X11 / bookworm / trixie / server）才会出现「GNOME 被压成 X11」，那里输入法走 ibus（X11 下同样可用），XFCE 走 fcitx5。
+> ⚠️ 与 `rkmpp-mpv` 的会话取向关系（由 workflow 的扩展清单决定，不再靠「让位」）：`rkmpp-mpv` 会把 GNOME 强制成 X11（`WaylandEnable=false`）。**Wayland 定制版（`build-wayland.yml`）根本不启用 `rkmpp-mpv`**，所以 h96s 仍是真正的 GNOME/Wayland + ibus-rime；**X11 定制版（`build-x11.yml`）启用它**，GNOME 会被压成 X11（那里输入法走 ibus，X11 下同样可用），XFCE 走 fcitx5。
 
 ## 本地编译
 

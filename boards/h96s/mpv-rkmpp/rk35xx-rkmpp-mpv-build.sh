@@ -17,6 +17,8 @@
 #        放到 MPV_TARBALL / MPV_PATCH 指向的路径（默认 /home/xiaobao/rkmpp-src/）。
 #        若 tarball 不存在，脚本会尝试 gitee 镜像作为兜底。
 # 用法 : sudo bash rk35xx-rkmpp-mpv-build.sh [build|uninstall|pack]
+#         小内存板（<=4G，如 RK3568 3.9G）必须降并行度：sudo JOBS=3 bash ...
+#         否则 ffmpeg 的 make -j8 会 OOM，甚至触发 OOM killer 杀掉桌面进程。
 #         build     编译并安装；BUILD_DEB=yes 时顺带打包当前发行版/架构的 .deb
 #         pack      仅打包（把已安装的栈打成 deb；跨发行版/跨架构重编后发布用）
 #         uninstall 卸载本栈
@@ -34,6 +36,9 @@ MPV_TAG=v0.41.0
 FFMPEG_LIBDIR=/usr/local/lib/ffmpeg-rkmpp
 LOG="$BUILD_BASE/build.log"
 VIDEO_DIR=/home/xiaobao/Videos
+# 并行度：默认 nproc，可用 JOBS 覆盖。ffmpeg 单个编译单元峰值可达数百 MB，
+# 3.9G 内存的板子用 -j8 会 OOM（CI/qemu 同理），降 JOBS 是唯一安全的旋钮。
+JOBS="${JOBS:-$(nproc)}"
 
 mkdir -p "$BUILD_BASE" "$SRC_DIR"
 exec > >(tee -a "$LOG") 2>&1
@@ -242,7 +247,7 @@ build_mpp() {
   cd mpp && mkdir -p build && cd build
   cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=ON -DBUILD_TEST=OFF ..
-  make -j"$(nproc)"
+  make -j"${JOBS}"
   make install
   ldconfig
   pkg-config --exists rockchip_mpp && log "MPP OK: $(pkg-config --modversion rockchip_mpp)" \
@@ -297,7 +302,7 @@ build_ffmpeg() {
       --extra-cflags="-I/usr/local/include" \
       --extra-ldflags="-L/usr/local/lib -Wl,-rpath,$FFMPEG_LIBDIR" \
       --disable-doc --disable-debug --disable-ffplay
-    make -j"$(nproc)"
+    make -j"${JOBS}"
   fi
   make install
   echo "$FFMPEG_LIBDIR" > /etc/ld.so.conf.d/99-ffmpeg-rockchip.conf
@@ -386,7 +391,7 @@ build_mpv() {
   meson setup build --prefix=/usr/local --buildtype=release \
     -Dx11=enabled -Dgl-x11=enabled -Degl-x11=enabled \
     -Ddrm=enabled -Dwayland=disabled -Dlibmpv=true
-  ninja -C build -j"$(nproc)"
+  ninja -C build -j"${JOBS}"
   # 硬校验：rkmpp 驱动对象确实被编译出来（补丁生效 + ffmpeg-rockchip 头文件可见）
   if ! grep -q "rkmpp" build/video/out/hwdec/libmpv_static.a 2>/dev/null && \
      ! grep -rqs "ra_hwdec_drmprime_rkmpp" build/ 2>/dev/null; then

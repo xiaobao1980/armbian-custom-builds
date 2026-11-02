@@ -248,11 +248,14 @@ XORG_EOF
 #    （_module_desktops_rockchip_multimedia，module_desktops.sh:147）。
 #    实测上游 main 已取不到该文件（raw.githubusercontent.com/armbian/build/main/
 #    extensions/mesa-vpu.sh → 404）。
-#    ⚠️ 但本仓库自带一份：common/extensions/mesa-vpu.sh，
-#    scripts/sync-board-to-build.sh 会把它同步到 userpatches/extensions/，
-#    Armbian 按「扩展名 → userpatches/extensions/<name>.sh」解析，因此
-#    ENABLE_EXTENSIONS=mesa-vpu 在本仓依然有效（noble/jammy + Wayland 桌面生效）。
-#    本 hook 保留为**兜底 + 补充**（扩展没装 mpp 用户态与 vpu.service），
+#    本仓原来自带一份拷贝，2026-11-02 已重构为薄扩展
+#    common/extensions/chromium-rkmpp.sh（只做「出厂即 chromium +rkmpp」），
+#    旧拷贝归档在 common/extensions/_archive/mesa-vpu.sh.obsolete。
+#    scripts/sync-board-to-build.sh 把 common/extensions/ 同步到
+#    userpatches/extensions/，Armbian 按「扩展名 → userpatches/extensions/<name>.sh」
+#    解析，因此 ENABLE_EXTENSIONS=chromium-rkmpp 有效（noble/jammy 桌面生效）。
+#    本 hook 保留为**兜底 + 补充**（扩展只保证 chromium 与 V4L2 插件，
+#    这里的 librockchip-mpp1 / mpp-demos / vpu.service 仍是它不负责的部分），
 #    两者共存是幂等的：PPA 源与 pin 都有存在性判断。
 #
 # 2) configng 那条路径在完整镜像构建里实测没跑。./compile.sh build 的日志
@@ -291,8 +294,10 @@ function post_family_tweaks__h96_m9_vpu_stack() {
 	# 2) Pin 必须是 1001 而不是 990：PPA 的 ffmpeg/chromium 需要能跨源替换
 	#    官方同名包，990 会以"降级"为由拒绝；完全没有 pin 时 apt 直接报
 	#    "Packages were downgraded and -y was used without --allow-downgrades"。
-	#    文件名与 common/extensions/mesa-vpu.sh 写入的保持一致 —— 两个 hook 都跑时
+	#    文件名与 common/extensions/chromium-rkmpp.sh 写入的保持一致 —— 两个 hook 都跑时
 	#    只有一个 pin 文件，内容相同且幂等，避免 /etc/apt/preferences.d 里出现两份。
+	#    （该扩展另写 amazingfated-chromium-rkmpp-pin:1002，专治 chromium 被
+	#     armbian 源 156 软解版挤掉；两者文件名不同、优先级互补，互不干扰。）
 	cat > "${SDCARD}"/etc/apt/preferences.d/amazingfated-rk3588-rockchip-multimedia-pin <<- 'EOF'
 		Package: *
 		Pin: release o=LP-PPA-liujianfeng1994-rockchip-multimedia

@@ -17,12 +17,18 @@
 # 落盘内容（全部在镜像内）：
 #   · root 密码；首次启动 rc.local 自动创建普通用户（幂等）
 #   · Locale=zh_CN.UTF-8 / 时区 / 中文字体 / 中国 NTP 源
+#   · AccountsService Language=zh_CN.UTF-8（GNOME/GDM 会话语言的实际来源，
+#     缺它就会出现「系统 locale 中文、桌面全英文」——187 实测根因）
 #   · 输入法：GNOME→ibus-rime；X11/XFCE 等→fcitx5-rime（均配 rime-ice 雾凇拼音）
 #   · Chromium 中文界面（语言包 + --lang + ApplicationLocale + Local State）
 #   · DTB 过滤：只保留本板 dtb 与本平台 dtbo（宿主侧直接操作 ${SDCARD}/boot）
 #
+# 发行版适配：全套逻辑按「Ubuntu / Debian」和「桌面环境」自适应，不锁发行版 ——
+#   jammy/noble 走 language-pack-*；trixie/bookworm 走 locales-all + 包自带翻译；
+#   字体/语言包一律逐包安装，单包在某发行版缺失不会拖垮整条 apt 事务。
+#
 # 与其它扩展的关系：
-#   · mpv/ffmpeg 硬解栈由 rkmpp-mpv.sh 负责；Chromium 硬解参数由 mesa-vpu.sh 的 PPA
+#   · mpv/ffmpeg 硬解栈由 rkmpp-mpv.sh 负责；Chromium 硬解（+rkmpp 包与 PPA）由
 #     负责。本扩展只管「中文」部分，不重复安装解码栈。
 #   · rkmpp-mpv.sh 会把 GNOME 强制成 X11（WaylandEnable=false）。若某板要保留
 #     GNOME/Wayland + ibus-rime，请在该板 build.env 设 RK_CN_IME=ibus 并**不启用**

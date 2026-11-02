@@ -6,6 +6,8 @@ name: Build Armbian Image (X11 定制版)
 #  固定策略（评测点，不可覆盖）：
 #    · 桌面必须是 X11：DESKTOP_ENVIRONMENT 只给 xfce/cinnamon/mate/lxqt/i3-wm
 #    · 硬解栈走 rkmpp-mpv（mpv + ffmpeg-rockchip，drm_prime 零拷贝，X11 专用）
+#    · 网页硬解走 chromium-rkmpp（PPA + pin1002 + chromium 132/126+rkmpp；仅 jammy/noble）
+#      两个扩展互不排斥，同时启用即「本地 4K 零拷贝 + 网页视频硬解」同一镜像。
 #    · 显示管理器按 X11 会话配置（gdm3 → WaylandEnable=false）
 #  可配置：板卡 / 发行版 / 桌面 / 默认用户（用户名·密码·root 密码·附加组·
 #          sudo 免密·桌面自动登录）/ 中文环境 / 压缩格式 / runner / 是否发 Release
@@ -99,7 +101,7 @@ on:
         default: true
 
       chinese:
-        description: "中文环境 (locale/字体/输入法/Chromium 中文化; 需 rk35xx vendor 内核)"
+        description: "中文环境 (所有发行版默认开启: locale/时区/字体/输入法/Chromium 中文化/AccountsService 会话语言; 仅 rk35xx vendor 内核生效)"
         type: boolean
         required: false
         default: true
@@ -285,7 +287,10 @@ jobs:
           [ -n "${IN_USER}" ] && add_ext default-user
           [ "${IN_CHINESE}" = "true" ] && add_ext rk35xx-chinese-desktop
           add_ext rkmpp-mpv
-          add_ext mesa-vpu
+          add_ext chromium-rkmpp
+          # 兜底补 display-manager.service：chroot 里 deb-systemd-helper 只建 .wants，
+          # 不建这个 Alias → gdm/gnome 路线会停在文字控制台（187 实测，见扩展头注释）
+          add_ext desktop-dm
 
           # ---- 5. 压缩格式 ----
           case "${IN_COMPRESS}" in
@@ -294,6 +299,11 @@ jobs:
             *)    COMPRESS="sha,img,xz" ;;
           esac
 
+          # ---- 6. 硬解栈组合（无需开关）----
+          # rkmpp-mpv（mpv 自编译，X11 零拷贝）与 chromium-rkmpp（chrome 网页硬解）互不排斥：
+          # 后者只碰 apt 源与 chromium，不做整机 dist-upgrade，不动 mpv 依赖的系统库。
+          # 可用性边界：mpv 0.41 需 libplacebo >= 6.338.2（trixie/noble ✓，jammy/bookworm ✗）；
+          # chromium+rkmpp 只在 jammy/noble 的 PPA。故 noble = 两件事都有，trixie = 只有 mpv。
           ARGS="BOARD=${BOARD} BRANCH=${BRANCH_FINAL} RELEASE=${REL_FINAL}"
           ARGS="${ARGS} BUILD_DESKTOP=yes BUILD_MINIMAL=no"
           ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DE_FINAL} DESKTOP_TIER=${TIER_FINAL}"
@@ -310,6 +320,51 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           echo "构建参数: ${ARGS}"
+
+      # 为什么要单独写文件：compile.sh 以非 root 启动时会 `exec sudo --preserve-env
+      # <白名单>` 重启自己（lib/functions/cli/utils-cli.sh），普通 env 全被丢弃 ——
+      # 只靠 step 的 env: 传 DEFAULT_USER_NAME，扩展读到时是空的，会静默跳过建用户。
+      # 文件通道不进 CLI 参数（不污染日志/进程列表），扩展读取后立刻删除。
+      - name: 准备构建期用户凭据 (文件通道, 规避 sudo 环境白名单)
+        # 扩展以 DEFAULT_USER_NAME 为总开关：没有用户名时连 root 密码也不处理，故这里同条件
+        if: ${{ inputs.user_name != '' }}
+        env:
+          IN_USER: ${{ inputs.user_name }}
+          IN_UPASS: ${{ inputs.user_password }}
+          IN_RPASS: ${{ inputs.root_password }}
+          IN_GROUPS: ${{ inputs.user_groups }}
+          IN_NOPASSWD: ${{ inputs.sudo_nopasswd }}
+          IN_AUTOLOGIN: ${{ inputs.desktop_autologin }}
+        run: |
+          set -euo pipefail
+          DEST="armbian-build/userpatches/.default-user.env"
+          mkdir -p "$(dirname "${DEST}")"
+          umask 077
+          : > "${DEST}"
+          {
+            printf 'DEFAULT_USER_NAME=%q\n' "${IN_USER}"
+            printf 'DEFAULT_USER_PASSWORD=%q\n' "${IN_UPASS}"
+            printf 'DEFAULT_USER_SHELL=%q\n' "/bin/bash"
+            printf 'DEFAULT_DESKTOP_SESSION_TYPE=%q\n' "x11"
+            if [ "${IN_NOPASSWD}" = "true" ]; then
+              printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "yes"
+            else
+              printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "no"
+            fi
+            if [ "${IN_AUTOLOGIN}" = "true" ]; then
+              printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "yes"
+            else
+              printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "no"
+            fi
+            if [ -n "${IN_GROUPS}" ]; then
+              printf 'DEFAULT_USER_GROUPS=%q\n' "${IN_GROUPS}"
+            fi
+            if [ -n "${IN_RPASS}" ]; then
+              printf 'DEFAULT_ROOT_PASSWORD=%q\n' "${IN_RPASS}"
+            fi
+          } >> "${DEST}"
+          chmod 600 "${DEST}"
+          echo "::notice::用户凭据已写入 userpatches/.default-user.env (0600)，扩展读取后即删除"
 
       - name: 预检 (X11 硬解栈选路 + 预编译包可用性)
         run: |
@@ -338,23 +393,29 @@ jobs:
           esac
 
           if [ "${VENDOR_RK}" != "1" ]; then
-            echo "::warning::${FAMILY} 不是 rk35xx/rockchip-rk3588 家族，rkmpp-mpv / mesa-vpu 都不会启用（无厂商 rkmpp 驱动）"
+            echo "::warning::${FAMILY} 不是 rk35xx/rockchip-rk3588 家族，rkmpp-mpv / chromium-rkmpp 都不会启用（无厂商 rkmpp 驱动）"
             exit 0
           fi
 
-          # X11 桌面 -> rkmpp-mpv；只有 jammy 例外（libplacebo 过旧，自动让位 mesa-vpu PPA）
-          if [ "${REL}" = "jammy" ]; then
-            echo "::notice::jammy + X11 -> mesa-vpu（PPA 栈，零编译）接管硬解"
-            exit 0
-          fi
-
-          echo "硬解栈: rkmpp-mpv（mpv/ffmpeg-rockchip，X11 零拷贝）"
-          if [ "${REL}" != "trixie" ]; then
+          # 硬解能力矩阵（两个扩展都启用，各自按发行版自动让位）
+          echo "::notice::硬解栈: mpv=rkmpp-mpv(自编译/X11 零拷贝) + 网页=chromium-rkmpp(PPA, 仅 jammy|noble)"
+          case "${REL}" in
+            noble)
+              echo "::notice::noble: 本地 4K 零拷贝(mpv) + 网页硬解(chromium 132+rkmpp) 同镜像，出厂即生效"
+              ;;
+            jammy)
+              echo "::warning::jammy: 网页硬解可用(chromium 126+rkmpp)，但 libplacebo 4.x 编不出 mpv 0.41 -> 本镜像无 mpv 硬解；两者都要请改 release=noble"
+              ;;
+            trixie)
+              echo "::warning::trixie: 只有 mpv 硬解；Debian 侧 chromium 无 V4L2 VDA patch（硬解死路），网页视频仍是软解"
+              ;;
+            bookworm | bullseye)
+              echo "::warning::${REL} 自带 libplacebo < 6.338.2（mpv 0.41 硬依赖），自编译 mpv 会中止构建。请改 trixie|noble。"
+              ;;
+          esac
+          if [ "${REL}" != "trixie" ] && [ "${REL}" != "jammy" ]; then
             echo "::warning::预编译 deb 的 build-info 写死 DISTRO_CODENAME=trixie，目标 ${REL} 会被判定跨发行版 -> 回退 chroot 源码编译 mpp+rga+ffmpeg+mpv，qemu 放大后极易撞 6h 上限。想要稳妥请改 release=trixie（或确认跑在 ubuntu-24.04-arm 原生 runner 上）。"
           fi
-          case "${REL}" in
-            bookworm|bullseye) echo "::warning::${REL} 自带 libplacebo < 6.338.2（mpv 0.41 硬依赖），自编译 mpv 会中止构建。请改 trixie。" ;;
-          esac
 
       - name: 构建摘要
         run: |
@@ -367,6 +428,7 @@ jobs:
             默认用户    : ${{ inputs.user_name }}   (sudo免密=${{ inputs.sudo_nopasswd }}, 自动登录=${{ inputs.desktop_autologin }})
             root 密码   : ${{ inputs.root_password == '' && '(不修改)' || '(已设置)' }}
             中文环境    : ${{ inputs.chinese }}
+            网页硬解    : chromium-rkmpp（PPA，出厂即 +rkmpp 版；仅 jammy/noble 有效）
             扩展        : ${{ steps.args.outputs.extensions }}
             压缩        : ${{ inputs.compress }}
           ────────────────────────────────────────────────
@@ -399,6 +461,11 @@ jobs:
             SHARE_LOG=yes \
             COMPRESS_OUTPUTIMAGE=${{ steps.args.outputs.compress }} \
             build
+
+      # 双保险：扩展读后已自删；这里兜住「扩展没跑到/编译中途失败」的残留
+      - name: 清理用户凭据文件 (无论成败)
+        if: always()
+        run: rm -f armbian-build/userpatches/.default-user.env && echo "凭据文件已清理"
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4

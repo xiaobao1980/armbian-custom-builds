@@ -41,7 +41,7 @@ bash /tmp/rkmpp-health-check.sh --json
 |---|---|---|
 | A | 平台与系统身份 | `aarch64` + 内核含 `vendor`/`rk35` + compatible 非 EVB |
 | B | 镜像版本线索 | `/etc/armbian-release` 的 `BOARD` / `armbianEnv.txt` 的 `fdtfile` |
-| C | 桌面会话 | `Xorg :0` 在跑（Wayland 会告警：应改用 mesa-vpu） |
+| C | 桌面会话 | `Xorg :0` 在跑（Wayland 会告警：网页硬解应改用 chromium-rkmpp 镜像） |
 | D | CMA 连续内存 | **`CmaTotal ≥ 524288 kB`（512M）** |
 | E | VPU/RGA/DRM 节点 | `/dev/mpp_service`、`/dev/rga`、`/dev/dri/renderD128` |
 | F | rkmpp 用户态库 | `librockchip_mpp`、`librga`、`ld.so.cache` 登记 |

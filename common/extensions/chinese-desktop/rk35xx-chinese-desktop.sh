@@ -233,14 +233,26 @@ EOF
 		systemctl enable systemd-timesyncd >/dev/null 2>&1 || true
 	fi
 
-	log "安装中文语言包与中文字体"
+	log "安装中文语言包与中文字体（按发行版自适应；逐包安装，单包缺失不影响其它）"
+	# ⚠️ 必须逐包安装：一条 apt-get 里只要有一个包名在某发行版/某架构不存在，
+	#    整条事务失败、一个都不装 —— 结果是「系统 locale 是中文、桌面却全英文」。
+	local p
 	if rk_cn_is_ubuntu; then
-		apt-get install -y -qq language-pack-zh-hans language-pack-zh-hans-base \
-			language-pack-gnome-zh-hans >/dev/null 2>&1 \
-			|| log "提示: language-pack-zh-hans 不可用（不影响字体/locale）"
+		# Ubuntu：翻译在 language-pack-*（GNOME 另有 language-pack-gnome-*）
+		for p in language-pack-zh-hans language-pack-zh-hans-base language-pack-gnome-zh-hans; do
+			if have_pkg "${p}"; then
+				apt-get install -y -qq "${p}" >/dev/null 2>&1 || log "提示: ${p} 安装失败（不影响字体/locale）"
+			else
+				log "提示: ${p} 在本发行版不存在，跳过"
+			fi
+		done
 	elif [ "${RK_CN_LOCALES_ALL}" = "1" ]; then
-		apt-get install -y -qq locales-all >/dev/null 2>&1 \
-			|| log "提示: locales-all 装不上，已由 locale-gen 兜底"
+		# Debian：翻译随各软件包自带（/usr/share/locale/zh_CN），只需 locale 数据
+		if have_pkg locales-all; then
+			apt-get install -y -qq locales-all >/dev/null 2>&1 || log "提示: locales-all 装不上，已由 locale-gen 兜底"
+		else
+			log "提示: locales-all 不可用，已由 locale-gen 兜底"
+		fi
 	fi
 	# zh_CN.UTF-8 兜底生成
 	if ! locale -a 2>/dev/null | grep -qiE '^zh_CN\.(utf8|UTF-8)'; then
@@ -248,12 +260,66 @@ EOF
 		locale-gen >/dev/null 2>&1 || true
 	fi
 
-	apt-get install -y -qq \
-		fonts-noto-cjk fonts-noto-cjk-extra \
-		fonts-wqy-zenhei fonts-wqy-microhei \
-		fonts-arphic-uming fonts-arphic-ukai >/dev/null 2>&1 \
-		|| log "警告: 部分中文字体安装失败"
+	# 字体同样逐包：trixie/bookworm/jammy/noble 的字体包集合并不完全一致
+	local font_ok=0
+	for p in fonts-noto-cjk fonts-noto-cjk-extra fonts-wqy-zenhei fonts-wqy-microhei \
+		fonts-arphic-uming fonts-arphic-ukai; do
+		if have_pkg "${p}" && apt-get install -y -qq "${p}" >/dev/null 2>&1; then
+			font_ok=$((font_ok + 1))
+		fi
+	done
+	if [ "${font_ok}" -eq 0 ]; then
+		log "警告: 所有中文字体包都没装上（界面可能显示方框）"
+	else
+		log "中文字体已装 ${font_ok} 个包"
+	fi
 	command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
+}
+
+# ============================================================
+# 2b. AccountsService 会话语言（GNOME/GDM 的实际语言来源）
+# ============================================================
+# 真根因（187 实测）：GDM/GNOME 不读 /etc/default/locale，只读
+# /var/lib/AccountsService/users/<user> 里的 Language= 字段。缺这一步会出现
+# 「系统 locale 是 zh_CN、桌面和应用全是英文」——看起来很玄，其实就是这里没写。
+# 构建期用户（default-user 扩展）与首启才建的用户都要覆盖，故按「已存在普通用户
+# + RK_CN_USER」两类一起写。
+rk_cn_accounts_one() {
+	local u="$1"
+	[ -n "${u}" ] || return 1
+	getent passwd "${u}" >/dev/null 2>&1 || return 1
+	mkdir -p /var/lib/AccountsService/users
+	cat > "/var/lib/AccountsService/users/${u}" <<EOF
+[User]
+Language=zh_CN.UTF-8
+SystemAccount=false
+EOF
+	chmod 600 "/var/lib/AccountsService/users/${u}" 2>/dev/null || true
+	return 0
+}
+
+rk_cn_setup_accounts_locale() {
+	[ "${RK_CN_BUILD_DESKTOP}" = "yes" ] || return 0
+	local u uid home n=0
+	while IFS=: read -r u _ uid _ _ home _; do
+		case "${uid}" in ''|*[!0-9]*) continue ;; esac
+		[ "${uid}" -ge 1000 ] && [ "${uid}" -lt 60000 ] || continue
+		[ -d "${home}" ] || continue
+		rk_cn_accounts_one "${u}" && n=$((n + 1))
+	done < /etc/passwd
+	# 首启才建的用户此刻可能还不存在：预写文件，GDM 登录时按用户名读取即可生效
+	if [ "${n}" -eq 0 ]; then
+		mkdir -p /var/lib/AccountsService/users
+		cat > "/var/lib/AccountsService/users/${RK_CN_USER}" <<EOF
+[User]
+Language=zh_CN.UTF-8
+SystemAccount=false
+EOF
+		chmod 600 "/var/lib/AccountsService/users/${RK_CN_USER}" 2>/dev/null || true
+		log "AccountsService: 构建期无普通用户，已为 ${RK_CN_USER} 预写 Language=zh_CN.UTF-8"
+	else
+		log "AccountsService: ${n} 个普通用户已设 Language=zh_CN.UTF-8"
+	fi
 }
 
 # ============================================================
@@ -457,7 +523,7 @@ EOF
 }
 
 # ============================================================
-# 4. Chromium 中文界面（hardware decode 由 rkmpp-mpv / mesa-vpu 负责）
+# 4. Chromium 中文界面（hardware decode 由 rkmpp-mpv / chromium-rkmpp 负责）
 # ============================================================
 rk_cn_setup_chromium_zh() {
 	[ "${RK_CN_BUILD_DESKTOP}" = "yes" ] || { log "非桌面镜像，跳过 Chromium 中文化"; return 0; }
@@ -466,7 +532,7 @@ rk_cn_setup_chromium_zh() {
 	command -v chromium >/dev/null 2>&1 && bin="chromium"
 	[ -z "${bin}" ] && command -v chromium-browser >/dev/null 2>&1 && bin="chromium-browser"
 	if [ -z "${bin}" ]; then
-		log "提示: 镜像内未安装 chromium（由 mesa-vpu/板级决定），跳过中文化"
+		log "提示: 镜像内未安装 chromium（由 chromium-rkmpp/板级决定），跳过中文化"
 		return 0
 	fi
 
@@ -538,6 +604,7 @@ if [ "${RK_CN_BUILD_DESKTOP}" = "yes" ]; then
 		*)      log "未知 RK_CN_IME=${ime}，按桌面自动选路"; \
 		        [ "${RK_CN_DESKTOP_ENV}" = "gnome" ] && rk_cn_ime_ibus || rk_cn_ime_fcitx5 ;;
 	esac
+	rk_cn_setup_accounts_locale
 	rk_cn_setup_chromium_zh
 	rk_cn_autologin_order
 else

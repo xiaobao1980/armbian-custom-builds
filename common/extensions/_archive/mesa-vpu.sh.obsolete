@@ -1,0 +1,293 @@
+#
+# SPDX-License-Identifier: GPL-2.0
+# Armbian build framework extension
+#
+# Enables 3D and multimedia, 4K VPU with Chromium, acceleration for Ubuntu. Debian only 3D
+#
+# =============================================================================
+#  扩展选路规则（本仓约定，2026-10-30）
+# -----------------------------------------------------------------------------
+#   GNOME/Wayland 桌面 + RELEASE=jammy|noble  ->  本扩展 mesa-vpu（PPA 栈，零编译）
+#   其它一切（X11 桌面 / Debian 系 / server）  ->  rkmpp-mpv.sh（自编译 RKMPP 栈）
+#
+#   两个扩展可以安全地同时写进 ENABLE_EXTENSIONS：判定互斥，只会有一个真正生效。
+#   CI 的 build-image.yml 允许在 build.env 之外覆盖 RELEASE / DESKTOP_ENVIRONMENT，
+#   所以「板级写死某一个扩展」会选错 —— 必须由扩展自己按实际参数判定。
+#
+#   ⚠️ _mesa_vpu__selected() 与 rkmpp-mpv.sh 的 _rkmpp_mpv__defer_to_mesa_vpu()
+#      是同一判据的正反两面，改动务必同步，否则会双开（PPA 栈 + 自编译栈混装）
+#      或双关（两条硬解路径都不装）。
+#
+#   可覆盖变量：
+#     MESA_VPU_FORCE=yes      强制走本扩展（例如 X11 桌面也想要 PPA 的 ffmpeg/gstreamer
+#                             rkmpp，而不是自编译 40 分钟）；此时 rkmpp-mpv 自动让位
+#     MESA_VPU_PANTHOR=yes    非 noble 也加 panthor-gpu overlay（默认仅 noble）
+#
+#  ⚠️ 双栈模式（RKMPP_DUAL_STACK=yes，noble + 桌面，2026-11-02 新增）
+# -----------------------------------------------------------------------------
+#  本仓第三条选路：noble + X11 上「mpv 自编译栈」与「chromium 132+rkmpp」同镜像共存。
+#  由 rkmpp-mpv.sh 负责 mpv/ffmpeg-rockchip（/usr/local 隔离 + rpath），本扩展**只补
+#  chromium 那半边**：PPA 源 + pin、libv4l-rkmpp、rockchip-multimedia-config
+#  (/dev/video-dec0)、chromium 132+rkmpp。
+#
+#  双栈下本扩展主动关掉三件危险动作（细节见 post_install_kernel_debs 内注释）：
+#    1. `dist-upgrade --allow-downgrades` —— 会换掉 mpv 动态链接的
+#       libplacebo/libass/libdav1d，导致「镜像构建 success 但 mpv 起不来」
+#    2. `apt-mark hold libdav1d7`         —— 只为配合上一条，双栈下无意义
+#    3. panthor-gpu overlay               —— 它要求 PPA 的 mesa 用户态；双栈不做整机
+#       dist-upgrade（不保证 mesa 有 panthor），加 overlay 会让 GPU 绑到无用户态的
+#       驱动上、GL 掉回 llvmpipe，故不加，沿用已验证的 X11/panfrost 基线
+#
+#  ⚠️ chromium 选包坑（2026-11-02 修复）：armbian 自己的 noble-desktop 源也提供
+#     chromium（156 xtradeb，**无 rkmpp**），与 PPA 的 132+rkmpp 优先级同为 1001 时
+#     apt 按版本号取大 → 装成 156 软解版，硬解版被静默挤掉（187 实测复现）。
+#     修法：给 chromium 栈单独写 1002 的具名 pin（更具体的 pin 优先）+ 显式点名
+#     整个栈安装 + --allow-downgrades，装完用 dpkg-query 校验版本含 +rkmpp。
+# =============================================================================
+
+# 双栈模式判定 —— 必须与 rkmpp-mpv.sh 的 _rkmpp_mpv__dual_stack() 逐字一致（两边同改），
+# 否则会出现「本扩展接管但 rkmpp-mpv 也让位」→ 镜像里只剩 chromium 没有 mpv 的静默退化。
+function _mesa_vpu__dual_stack() {
+	[[ "${RKMPP_DUAL_STACK:-no}" == "yes" ]] || return 1
+	[[ "${RELEASE:-}" == "noble" ]] || return 1
+	[[ "${BUILD_MINIMAL:-}" == "yes" ]] && return 1
+	[[ "${BUILD_DESKTOP:-}" == "yes" ]] || return 1
+	return 0
+}
+
+# 本扩展是否生效 —— 全文件唯一判定点
+function _mesa_vpu__selected() {
+	# PPA 只发布 jammy / noble 两个系列（bookworm/trixie 等交给 rkmpp-mpv 自编译）
+	[[ "${RELEASE:-}" =~ ^(jammy|noble)$ ]] || return 1
+
+	# minimal 镜像不装
+	[[ "${BUILD_MINIMAL:-}" == "yes" ]] && return 1
+
+	# 显式强制（X11 桌面也走 PPA 栈）
+	[[ "${MESA_VPU_FORCE:-no}" == "yes" ]] && return 0
+
+	# 本扩展面向桌面镜像；server/CLI 由 rkmpp-mpv 接管（它只在有桌面时才配显示管理器）
+	[[ "${BUILD_DESKTOP:-}" == "yes" ]] || return 1
+
+	# jammy 只能走 PPA：自编译 mpv 0.41 需要 libplacebo >= 6.338.2，jammy 自带 4.x，必失败
+	[[ "${RELEASE}" == "jammy" ]] && return 0
+
+	# 双栈模式（noble + 桌面）：mpv 那半边由 rkmpp-mpv 负责，本扩展也生效但只做
+	# chromium 子集。放在 DE 判定之前 —— X11 桌面（xfce/i3/…）在双栈下同样需要 chromium。
+	_mesa_vpu__dual_stack && return 0
+
+	# noble：只有 Wayland 能力桌面才走 PPA；X11 桌面（xfce/i3/cinnamon/mate/lxqt）让位 rkmpp-mpv
+	case "${DESKTOP_ENVIRONMENT:-}" in
+		gnome | kde-plasma | budgie) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+function extension_prepare_config__mesa-vpu() {
+	if ! _mesa_vpu__selected; then
+		display_alert "Extension: ${EXTENSION}" \
+			"skip (${RELEASE:-?}/${DESKTOP_ENVIRONMENT:-no-desktop}): not a jammy|noble Wayland desktop -> rkmpp-mpv.sh owns this combo (if the family supports it)" "info"
+		return 0
+	fi
+
+	# panthor DTB overlay：仅 noble（jammy 自带 mesa 22.x 无 panthor 驱动，
+	# 强行开 overlay 会让 GPU 绑到无用户态的 panthor 上、GL 掉回 llvmpipe）
+	# 双栈模式例外：此时不做整机 dist-upgrade，mesa 不保证有 panthor 用户态，
+	# 加 overlay 会把 GPU 绑到无用户态的驱动上（GL 掉 llvmpipe），故不加 ——
+	# 沿用已验证的 X11/panfrost 基线。
+	if [[ "${LINUXFAMILY}" =~ ^(rockchip-rk3588|rk35xx)$ && "${BRANCH}" == "vendor" ]]; then
+		if _mesa_vpu__dual_stack; then
+			display_alert "Extension: ${EXTENSION}" "双栈模式: 跳过 panthor-gpu overlay（不切 PPA mesa，避免 GL 掉回 llvmpipe）" "info"
+		elif [[ "${RELEASE}" == "noble" || "${MESA_VPU_PANTHOR:-no}" == "yes" ]]; then
+			# 不用 `declare -g`（bash 3.2 不支持，本地 mock/老 shell 会报错）；
+			# 这种写法在 bash 3.2+ 与 5.x 下语义一致。
+			DEFAULT_OVERLAYS="${DEFAULT_OVERLAYS:+${DEFAULT_OVERLAYS} }panthor-gpu"
+			display_alert "Extension: ${EXTENSION}" "panthor-gpu overlay enabled (${RELEASE})" "info"
+		fi
+	fi
+
+	if _mesa_vpu__dual_stack; then
+		display_alert "Extension: ${EXTENSION}" "mesa-vpu selected: ${RELEASE}/${DESKTOP_ENVIRONMENT} 双栈模式 —— 仅装 chromium 硬解子集（mpv 由 rkmpp-mpv 负责）" "info"
+	else
+		display_alert "Extension: ${EXTENSION}" "mesa-vpu selected: ${RELEASE}/${DESKTOP_ENVIRONMENT} (Wayland, PPA stack)" "info"
+	fi
+	return 0
+}
+
+function post_install_kernel_debs__mesa-vpu() {
+	_mesa_vpu__selected || return 0
+
+	# Packages that are going to be installed, always, both for cli and desktop
+	declare -a pkgs=("libgl1-mesa-dri")
+	# PPA 专属可选包：缺失只告警，不能让整镜像挂掉
+	declare -a opt_pkgs=()
+
+	if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+		pkgs+=("libglx-mesa0") # x11 stuff all the way
+		pkgs+=("mesa-utils" "mesa-utils-extra")
+		pkgs+=("glmark2" "glmark2-wayland" "glmark2-es2-wayland" "glmark2-es2" "glmark2-x11" "glmark2-es2-x11")
+	fi
+
+	# ---- amazingfated PPA：只对 vendor 内核的 rockchip 家族的桌面镜像加 ----
+	local ppa_ok=0
+	if [[ "${BUILD_DESKTOP}" == "yes" ]] \
+		&& [[ "${LINUXFAMILY}" =~ ^(rockchip-rk3588|rk35xx)$ && "${BRANCH}" =~ ^(vendor)$ ]]; then
+		display_alert "Adding amazingfated's multimedia PPAs" "${EXTENSION}" "info"
+		# 加 PPA 失败不再中止构建：退回发行版自带 mesa（无 rkmpp），至少 3D/桌面可用
+		if do_with_retries 3 chroot_sdcard add-apt-repository ppa:liujianfeng1994/rockchip-multimedia --yes --no-update; then
+			ppa_ok=1
+			display_alert "Pinning amazingfated's multimedia PPAs" "${EXTENSION}" "info"
+			cat <<- EOF > "${SDCARD}"/etc/apt/preferences.d/amazingfated-rk3588-rockchip-multimedia-pin
+				Package: *
+				Pin: release o=LP-PPA-liujianfeng1994-rockchip-multimedia
+				Pin-Priority: 1001
+			EOF
+			# chromium 栈单独提到 1002 —— 这是修「镜像里装成软解 chromium」的关键：
+			# armbian 的 noble-desktop 源同样提供 chromium（156 xtradeb，无 rkmpp），
+			# 两个源的优先级都是 1001 时 apt 按「版本号更大」取胜，PPA 的
+			# 132+rkmpp 被 156 挤掉（187 实测：镜像内 156.0.8078.73-1xtradeb1，
+			# 视频仍是 FFmpegVideoDecoder 软解）。
+			# apt 的规则是「更具体的 pin 优先」，具名 stanza 的 1002 稳压上面 * 的 1001。
+			cat <<- EOF > "${SDCARD}"/etc/apt/preferences.d/amazingfated-chromium-rkmpp-pin
+				Package: chromium chromium-common chromium-l10n chromium-driver chromium-shell
+				Pin: release o=LP-PPA-liujianfeng1994-rockchip-multimedia
+				Pin-Priority: 1002
+			EOF
+		else
+			display_alert "add-apt-repository failed; falling back to distro mesa (no rkmpp)" "${EXTENSION}" "warn"
+		fi
+	fi
+
+	display_alert "Updating sources list, after adding all PPAs" "${EXTENSION}" "info"
+	do_with_retries 3 chroot_sdcard_apt_get_update
+
+	# KDE neon downgrades base-files for some reason. This prevents tacking it
+	do_with_retries 3 chroot_sdcard apt-mark hold base-files
+
+	if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+		# 该库必须在 rockchip-multimedia-config 之前装。包名随 time_t 迁移变化：
+		#   jammy            -> libv4l-0
+		#   noble 及之后      -> libv4l-0t64
+		local v4l_pkg="libv4l-0"
+		case "${RELEASE}" in
+			noble | oracular | plucky | questing | resolute) v4l_pkg="libv4l-0t64" ;;
+		esac
+		do_with_retries 3 chroot_sdcard_apt_get_install "${v4l_pkg}" \
+			|| display_alert "install ${v4l_pkg} failed; rockchip-multimedia-config may fail too" "${EXTENSION}" "warn"
+	fi
+
+	if [[ ${ppa_ok} -eq 1 ]]; then
+		pkgs+=("rockchip-multimedia-config" "libv4l-rkmpp")
+		# PPA 里 gstreamer rockchip 插件的真实包名是 gstreamer1.0-rockchip1
+		# （jammy / noble 一致；不存在 gstreamer1.0-rockchip 这个包，装它会整个 apt 事务失败）
+		opt_pkgs+=("gstreamer1.0-rockchip1" "libwidevinecdm0")
+	fi
+
+	display_alert "Installing 3D extension packages" "${EXTENSION}" "info"
+	do_with_retries 3 chroot_sdcard_apt_get_install "${pkgs[@]}"
+
+	if [[ ${#opt_pkgs[@]} -gt 0 ]]; then
+		display_alert "Installing optional PPA packages: ${opt_pkgs[*]}" "${EXTENSION}" "info"
+		do_with_retries 2 chroot_sdcard_apt_get_install "${opt_pkgs[@]}" \
+			|| display_alert "optional PPA packages not all installed (${opt_pkgs[*]})" "${EXTENSION}" "warn"
+	fi
+
+	# ---- 整机 dist-upgrade 守护 ----
+	# 原意：把 mesa 等整体切到 PPA 版本。但 `--allow-downgrades dist-upgrade` 是无差别
+	# 换版本，不区分谁依赖它。双栈模式下 mpv 是自编译二进制、动态链接系统的
+	# libplacebo / libass / libdav1d，一旦被换成别的版本就 runtime 起不来 ——
+	# 表现是「镜像构建 success、播放器报废」，比构建失败更糟。
+	# 故双栈只做定向安装（上面的 pkgs/opt_pkgs，PPA pin 1001 已保证新装包取自 PPA），
+	# 绝不整机 dist-upgrade。
+	if _mesa_vpu__dual_stack; then
+		display_alert "双栈模式: 跳过 dist-upgrade 与 libdav1d7 hold（保护 mpv 动态依赖）；PPA 包仍按 pin 1001 定向安装" "${EXTENSION}" "info"
+	else
+		# This library gets downgraded
+		if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+			if [[ "${RELEASE}" =~ ^(oracular|noble)$ && "${ARCH}" == arm* ]]; then
+				do_with_retries 3 chroot_sdcard apt-mark hold libdav1d7
+			fi
+		fi
+
+		display_alert "Upgrading all packages, including hopefully all mesa packages" "${EXTENSION}" "info"
+		do_with_retries 3 chroot_sdcard_apt_get -o Dpkg::Options::="--force-confold" --allow-downgrades dist-upgrade
+
+		if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+			if [[ "${RELEASE}" =~ ^(oracular|noble)$ && "${ARCH}" == arm* ]]; then
+				do_with_retries 3 chroot_sdcard apt-mark unhold libdav1d7
+			fi
+		fi
+	fi
+
+	# KDE neon downgrade hack undo —— 两条分支都必须执行：上面无条件 hold 了 base-files，
+	# 漏了这一步会把 base-files 永久 hold 在镜像里。
+	do_with_retries 3 chroot_sdcard apt-mark unhold base-files
+
+	return 0
+}
+
+# arm64/armhf 的 chromium 安装：必须落到 PPA 的 132+rkmpp，而不是 armbian 源的 156 软解版
+function _mesa_vpu__install_chromium_rkmpp() {
+	# 显式点名整个 chromium 栈：只写 `chromium` 时会因依赖解析装成混合版本，
+	# 且若镜像里已先装过 156（armbian 桌面档可能预装），降级必须 --allow-downgrades。
+	local -a chromium_pkgs=("chromium" "chromium-common" "chromium-l10n")
+	local p
+	for p in chromium-driver chromium-shell; do
+		# 可选组件：**必须** PPA 也提供 +rkmpp 版本才追加。
+		# 只看「包是否存在」会踩坑 —— armbian 源同样提供这两个包的 156 版，
+		# 装进 132 的事务里会因版本互锁把整条 apt 搞失败，反而回退成软解。
+		if chroot_sdcard apt-cache policy "${p}" 2>/dev/null | grep -q '+rkmpp'; then
+			chromium_pkgs+=("${p}")
+		fi
+	done
+
+	display_alert "Installing browser (chromium rkmpp stack: ${chromium_pkgs[*]})" "${EXTENSION}" "info"
+	if ! do_with_retries 3 chroot_sdcard_apt_get --allow-downgrades \
+		-o Dpkg::Options::="--force-confold" install "${chromium_pkgs[@]}"; then
+		# 兜底：至少保证桌面镜像有浏览器，宁可软解也不能没浏览器
+		display_alert "chromium rkmpp stack install failed; falling back to plain 'chromium' (software decode)" "${EXTENSION}" "warn"
+		do_with_retries 3 chroot_sdcard_apt_get_install "chromium" || return 0
+	fi
+
+	# 验收：装到的必须是 +rkmpp 版。装成 156 时镜像静默退化为软解，
+	# 只在用户播 4K 时表现为 CPU 打满 —— 必须在这里留下明确痕迹。
+	local chromium_ver
+	chromium_ver="$(chroot_sdcard dpkg-query -W -f='${Version}' chromium 2>/dev/null || true)"
+	if [[ "${chromium_ver}" == *rkmpp* ]]; then
+		display_alert "chromium ${chromium_ver} installed (+rkmpp): V4L2 VDA -> libv4l-rkmpp -> MPP" "${EXTENSION}" "info"
+	else
+		display_alert "chromium ${chromium_ver:-?} is NOT the +rkmpp build: web video will fall back to FFmpegVideoDecoder (software). Check whether the PPA publishes chromium for ${RELEASE}/${ARCH} and that the 1002 pin applied" "${EXTENSION}" "warn"
+	fi
+
+	return 0
+}
+
+function post_armbian_repo_customize_image__mesa-vpu() {
+	_mesa_vpu__selected || return 0
+
+	# Add browser if building a desktop - architecture dependent
+	[[ "${BUILD_DESKTOP}" != "yes" ]] && return 0
+
+	if [[ "${ARCH}" == "amd64" ]]; then
+		# amd64: prefer google-chrome
+		display_alert "Installing browser (google-chrome-stable)" "${EXTENSION}" "info"
+		do_with_retries 3 chroot_sdcard_apt_get_install "google-chrome-stable"
+	elif [[ "${ARCH}" =~ ^(arm64|armhf)$ ]]; then
+		# arm64/armhf: 硬解 chromium（PPA 132+rkmpp）
+		_mesa_vpu__install_chromium_rkmpp
+	else
+		# other architectures: fallback to firefox
+		display_alert "Installing browser (firefox)" "${EXTENSION}" "info"
+		do_with_retries 3 chroot_sdcard_apt_get_install "firefox"
+	fi
+
+	# ---- 双栈联合自检 ----
+	# 本函数是整条安装链的最后一步（chromium 已就位），此时才有意义确认
+	# 「PPA 动过 apt 之后，自编译 mpv 是否还活着」。校验函数由 rkmpp-mpv.sh 提供，
+	# 用 declare -F 探测以兼容未启用该扩展的镜像。
+	if _mesa_vpu__dual_stack && declare -F _rkmpp_mpv__dual_stack_verify >/dev/null 2>&1; then
+		_rkmpp_mpv__dual_stack_verify
+	fi
+
+	return 0
+}
