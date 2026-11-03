@@ -212,8 +212,17 @@ function post_armbian_repo_customize_image__chromium-rkmpp() {
 
 	# ---- 7. 验收：装到的必须是 +rkmpp 版 ----
 	# 装成发行版版本时镜像静默退化为软解，只在播 4K 时表现为 CPU 打满 —— 必须留痕。
-	local chromium_ver
-	chromium_ver="$(chroot_sdcard dpkg-query -W -f='${Version}' chromium 2>/dev/null || true)"
+	# ⚠ 不要写 chroot_sdcard dpkg-query -W -f='${Version}' chromium：
+	# chroot_sdcard 把参数拼成字符串再交给 chroot 内的 bash **重新解析**，单引号在拼接
+	# 阶段已被吃掉，于是 ${Version} 在 chroot 里被展开成空 → dpkg-query 报
+	# `error in show format: may not be empty string`，版本号永远取不到（2026-11-03 CI 实测）。
+	# 直接读 SDCARD 的 dpkg status，零引号/零 chroot 风险。
+	local chromium_ver=""
+	chromium_ver="$(awk '
+		/^Package: / { pkg = ($2 == "chromium") ? 1 : 0; ins = 0; next }
+		pkg && /^Status: / { ins = ($0 ~ /install ok installed/) ? 1 : 0; next }
+		pkg && ins && /^Version: / { sub(/^Version: /, ""); print; exit }
+	' "${SDCARD}/var/lib/dpkg/status" 2>/dev/null || true)"
 	if [[ "${chromium_ver}" == *rkmpp* ]]; then
 		display_alert "chromium ${chromium_ver} installed (+rkmpp): V4L2 VDA -> libv4l-rkmpp -> MPP" "${EXTENSION}" "info"
 	else
