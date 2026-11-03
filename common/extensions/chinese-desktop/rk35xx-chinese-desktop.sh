@@ -103,6 +103,18 @@ rk_cn_setup_user() {
 # 由 rk35xx-chinese-desktop 部署：首次启动创建普通用户并设密码（幂等）
 [ -f /var/lib/armbian-firstboot-user.done ] && exit 0
 
+# ⚠️ GDM/GNOME 会话语言真来源：AccountsService Language 字段（187 实测坑，
+# 2026-11-03 noble r6：构建期写入的 /var/lib/AccountsService/users/<user>
+# 在成品镜像里消失 → GDM 回落英文）。首启兜底重建，幂等；两条分支都要生效
+# 所以放在 default-user.conf 分支判断之前。
+mkdir -p /var/lib/AccountsService/users
+cat > /var/lib/AccountsService/users/${RK_CN_USER} <<ASEOF
+[User]
+Language=zh_CN.UTF-8
+SystemAccount=false
+ASEOF
+chmod 600 /var/lib/AccountsService/users/${RK_CN_USER} 2>/dev/null || true
+
 # 幂等：若镜像已在构建期由 default-user 扩展建好用户（/etc/default-user.conf 存在），
 # 这里只同步密码/组，绝不 userdel + 重建 —— 否则首启会把构建期配好的 uid、家目录、
 # sudo 免密和自动登录对象一起抹掉，桌面直接登不进去。
@@ -239,13 +251,30 @@ EOF
 	local p
 	if rk_cn_is_ubuntu; then
 		# Ubuntu：翻译在 language-pack-*（GNOME 另有 language-pack-gnome-*）
-		for p in language-pack-zh-hans language-pack-zh-hans-base language-pack-gnome-zh-hans; do
+		# ⚠️ 187 实测坑（2026-11-03，noble r6 镜像）：language-pack 装失败被下面的
+		#    `|| log 提示` 静默吞掉，成品镜像「locale=zh_CN 但桌面全英文」——
+		#    Ubuntu 桌面翻译只存在于 language-pack-* 里，不像 Debian 随包自带。
+		#    故改为：先 apt update → 逐包安装 → 失败重试一次 → 终验，失败大声报错。
+		apt-get update -qq >/dev/null 2>&1 || true
+		for p in language-pack-zh-hans language-pack-zh-hans-base \
+			language-pack-gnome-zh-hans language-pack-gnome-zh-hans-base; do
 			if have_pkg "${p}"; then
-				apt-get install -y -qq "${p}" >/dev/null 2>&1 || log "提示: ${p} 安装失败（不影响字体/locale）"
+				if ! apt-get install -y -qq "${p}" >/dev/null 2>&1; then
+					log "警告: ${p} 首次安装失败，update 后重试"
+					apt-get update -qq >/dev/null 2>&1 || true
+					apt-get install -y -qq "${p}" >/dev/null 2>&1 \
+						|| log "错误: ${p} 重试仍失败 → Ubuntu 桌面将回落英文！"
+				fi
 			else
 				log "提示: ${p} 在本发行版不存在，跳过"
 			fi
 		done
+		# 终验：locale-langpack 里必须有 .mo，否则桌面整体回落英文
+		if ls /usr/share/locale-langpack/zh_CN/LC_MESSAGES/*.mo >/dev/null 2>&1; then
+			log "zh_CN 翻译文件已就位（locale-langpack 校验通过）"
+		else
+			log "错误: zh_CN 翻译文件缺失（language-pack 全部未装上）→ 桌面将回落英文！"
+		fi
 	elif [ "${RK_CN_LOCALES_ALL}" = "1" ]; then
 		# Debian：翻译随各软件包自带（/usr/share/locale/zh_CN），只需 locale 数据
 		if have_pkg locales-all; then

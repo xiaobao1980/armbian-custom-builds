@@ -91,6 +91,17 @@ CONF
 		echo "[lz200] 内核/模块同源自检可用: lz200-kernel-sync-check.sh" >&2
 	fi
 
+	# ---- 6. 剔除 VLC（对齐 h96s/aio-3288c 板的既定策略）----
+	# Armbian 桌面任务（GNOME mid 档）默认拉入 VLC；RK 平台 VLC 无法走 rkmpp
+	# 硬解，4K60 VP9 软解会花屏+卡顿。硬解播放由 mpv(rkmpp) 承担，VLC 纯冗余。
+	# ⚠️ 显式列包而非 'vlc*' 通配：apt 对含 * 的参数按 POSIX 正则解释（未锚定），
+	#    'vlc*' 会匹配任何含 "vl" 的包名，有误删风险（187 模拟跑出 0 个 Remv
+	#    即通配没按预期工作）。
+	apt-get purge -y --autoremove vlc vlc-bin vlc-data vlc-l10n vlc-plugin-base \
+		vlc-plugin-notify vlc-plugin-samba vlc-plugin-skins2 vlc-plugin-video-output \
+		vlc-plugin-video-splitter vlc-plugin-visualization \
+		libvlc5 libvlc-bin libvlccore9 2>/dev/null || true
+
 	case $RELEASE in
 		noble)
 			# Ubuntu noble-specific tweaks (if any)
