@@ -308,6 +308,12 @@ jobs:
           ARGS="${ARGS} BUILD_DESKTOP=yes BUILD_MINIMAL=no"
           ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DE_FINAL} DESKTOP_TIER=${TIER_FINAL}"
           ARGS="${ARGS} ENABLE_EXTENSIONS=${EXT}"
+          # default-user 在 chroot 里 useradd -m 建的家目录，会被框架的
+          # create_image_from_sdcard_rootfs 用 --exclude="/home/*" 丢掉
+          # （lib/functions/image/rootfs-to-image.sh:38），镜像里只剩空 /home，
+          # 用户能自动登录但 $HOME 不存在（profile-sync-daemon / 语言保存全失败）。
+          # 显式 INCLUDE_HOME_DIR=yes 才会把 /home/<user> 连同 /etc/skel 打进镜像。
+          ARGS="${ARGS} INCLUDE_HOME_DIR=yes"
 
           {
             echo "args=${ARGS}"

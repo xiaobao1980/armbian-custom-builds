@@ -47,6 +47,14 @@
 #   因此 CI 改由 **文件** 传凭据：构建前写 ${SRC}/userpatches/.default-user.env（0600），
 #   这里 source 一次后立刻删除 —— 既不进 CLI 参数（不污染日志/进程列表），
 #   也不受 sudo 白名单影响。本地构建仍可直接用环境变量或板卡 config，两者兼容。
+#
+# ⚠️ 为什么还要 INCLUDE_HOME_DIR=yes（187 实测，2026-11-03）：
+#   Armbian 把 SDCARD 打成镜像时 rsync 默认带 --exclude="/home/*"
+#   （lib/functions/image/rootfs-to-image.sh:38），构建期 useradd -m 建的家目录会被丢弃，
+#   镜像里只剩空 /home → 用户能自动登录但 $HOME 不存在（profile-sync-daemon /
+#   AccountsService 语言保存全失败）。构建侧必须显式 INCLUDE_HOME_DIR=yes
+#   （两个 workflow 的 ARGS 与各板 build.env 均已设），扩展另写
+#   /etc/tmpfiles.d/default-user.conf 在开机早期兜底补建家目录、纠正属主。
 _default_user_load_file() {
 	[[ "${_DEFAULT_USER_FILE_LOADED:-no}" == "yes" ]] && return 0
 	_DEFAULT_USER_FILE_LOADED=yes
@@ -385,6 +393,27 @@ function post_family_tweaks__default_user() {
 		SESSION_TYPE=${DEFAULT_DESKTOP_SESSION_TYPE:-auto}
 	EOF
 	chmod 644 "${SDCARD}/etc/default-user.conf"
+
+	# ---- 兜底：Armbian 镜像默认排除 /home/* ----
+	# create_image_from_sdcard_rootfs() 的 rsync 带 --exclude="/home/*"
+	# （lib/functions/image/rootfs-to-image.sh:38），所以上面 chroot 里 useradd -m
+	# 建的家目录**不会进镜像**：/etc/passwd 有用户、/home 却是空的（187 实测：
+	# gdm 自动登录成功但 $HOME 不存在，profile-sync-daemon 报 Permission denied，
+	# AccountsService 保存语言失败）。主修复是构建参数 INCLUDE_HOME_DIR=yes；
+	# 这里再写一条 tmpfiles 规则，在开机早期（sysinit，早于 display-manager）
+	# 补建家目录并纠正属主，作为防回归兜底。
+	local _uid _gid
+	_uid="$(awk -F: -v u="${DEFAULT_USER_NAME}" '$1==u{print $3}' "${SDCARD}/etc/passwd" 2>/dev/null)"
+	_gid="$(awk -F: -v u="${DEFAULT_USER_NAME}" '$1==u{print $4}' "${SDCARD}/etc/passwd" 2>/dev/null)"
+	if [[ -n "${_uid}" && -n "${_gid}" ]]; then
+		mkdir -p "${SDCARD}/etc/tmpfiles.d"
+		{
+			echo '# 由 default-user 扩展写入。Armbian 镜像默认 --exclude="/home/*"，'
+			echo '# 家目录可能不在镜像内；开机早期补建并纠正属主（早于 display-manager）。'
+			echo "d /home/${DEFAULT_USER_NAME} 0755 ${_uid} ${_gid} -"
+		} > "${SDCARD}/etc/tmpfiles.d/default-user.conf"
+		chmod 644 "${SDCARD}/etc/tmpfiles.d/default-user.conf"
+	fi
 	return 0
 }
 

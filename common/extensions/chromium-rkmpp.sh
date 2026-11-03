@@ -185,6 +185,31 @@ function post_armbian_repo_customize_image__chromium-rkmpp() {
 		do_with_retries 3 chroot_sdcard_apt_get_install "chromium" || return 0
 	fi
 
+	# ---- 6.5 pak 资源完整性（dpkg 降级 file-takeover 陷阱，187 实测踩中）----
+	# 桌面档预装的 chromium-common 156(xtradeb) 提供 /usr/lib/chromium/*.pak。降级装
+	# chromium 132 时 dpkg 判定这些路径「已被 chromium-common(156) 占用」而跳过写入
+	# （日志 Replaced by files in installed package chromium-common ...），紧接着
+	# chromium-common 156->132 又把它们删掉（132 的 common 包不含 pak）。
+	# 净结果：浏览器能开、网页正常，但 chrome://settings 等 webui 把内部 JSON 当文本
+	# 渲染、图标全缺，且 dpkg 不报任何错（--verify 也是干净的）。
+	# 这里做幂等校验，缺就重装主包让 pak 落位（此时 156 已被 132 替换，无归属冲突）。
+	local _pak_missing=no _pak
+	for _pak in resources.pak chrome_100_percent.pak chrome_200_percent.pak; do
+		[[ -f "${SDCARD}/usr/lib/chromium/${_pak}" ]] || _pak_missing=yes
+	done
+	[[ -f "${SDCARD}/usr/lib/chromium/locales/en-US.pak" ]] || _pak_missing=yes
+	if [[ ${_pak_missing} == yes ]]; then
+		display_alert "chromium 资源包缺失（dpkg 降级 file-takeover 陷阱），重装主包补齐" "${EXTENSION}" "warn"
+		do_with_retries 3 chroot_sdcard_apt_get --reinstall \
+			-o Dpkg::Options::="--force-confold" install "chromium" \
+			|| display_alert "chromium --reinstall 失败：chrome://settings 等内部页面会显示原始 JSON" "${EXTENSION}" "warn"
+	fi
+	# 二次确认：重装后仍缺则明确留痕，避免又变成「看起来装好了」
+	for _pak in resources.pak chrome_100_percent.pak; do
+		[[ -f "${SDCARD}/usr/lib/chromium/${_pak}" ]] \
+			|| display_alert "chromium 仍缺 ${_pak}：webui/图标会异常（检查 PPA 包是否完整）" "${EXTENSION}" "warn"
+	done
+
 	# ---- 7. 验收：装到的必须是 +rkmpp 版 ----
 	# 装成发行版版本时镜像静默退化为软解，只在播 4K 时表现为 CPU 打满 —— 必须留痕。
 	local chromium_ver
