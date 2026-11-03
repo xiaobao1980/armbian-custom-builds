@@ -393,7 +393,7 @@ build_mpv() {
   rm -rf build
   meson setup build --prefix=/usr/local --buildtype=release \
     -Dx11=enabled -Dgl-x11=enabled -Degl-x11=enabled \
-    -Ddrm=enabled -Dwayland=enabled -Dgl-wayland=enabled -Dlibmpv=true
+    -Ddrm=enabled -Dwayland=enabled -Degl-wayland=enabled -Dlibmpv=true
   ninja -C build -j"${JOBS}"
   # 硬校验：rkmpp 驱动对象确实被编译出来（补丁生效 + ffmpeg-rockchip 头文件可见）
   if ! grep -q "rkmpp" build/video/out/hwdec/libmpv_static.a 2>/dev/null && \

@@ -93,7 +93,7 @@ trap 'rm -rf "$WORK"' EXIT
 # ---- 1. 收集文件（与线上验证过的 deb 同构；目录用 multiarch 自适应跨架构）----
 shopt -s nullglob
 SRC=()
-add() { local p; for p in "$@"; do [ -e "$p" ] && SRC+=("$p"); done; }
+add() { local p; for p in "$@"; do if [ -e "$p" ]; then SRC+=("$p"); fi; done; }
 
 add "$PREFIX/bin/mpv" "$PREFIX/bin/ffmpeg" "$PREFIX/bin/ffprobe"
 add "$PREFIX"/lib/ffmpeg-rkmpp/*
