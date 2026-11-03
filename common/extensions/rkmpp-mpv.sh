@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0
 # Armbian build framework extension
 #
-# rkmpp-mpv: 全局 RKMPP + mpv 硬件解码加速（X11 桌面，RK35xx / RK3588 vendor 内核）
+# rkmpp-mpv: 全局 RKMPP + mpv 硬件解码加速（X11 / Wayland 桌面，RK35xx / RK3588 vendor 内核）
 #
 # =============================================================================
 #  v3 栈（与板端 192.168.50.105 验证通过的栈完全一致）
@@ -48,7 +48,9 @@
 #  与 chromium-rkmpp.sh 的关系（2026-11-02 重构后）
 # -----------------------------------------------------------------------------
 #  本扩展负责 **mpv 这半边**：自编译 mpv/ffmpeg-rockchip（/usr/local 隔离 + rpath，
-#  drm_prime 零拷贝）+ 强制 X11 + CMA 兜底。
+#  drm_prime 零拷贝）+ 桌面会话适配（X11 强制 / Wayland 不强制）+ CMA 兜底。
+#  同一份 mpv 二进制同时带 x11 与 wayland 后端；mpv.conf 不写死 gpu-context，
+#  vo=gpu 按会话自动选 egl-x11 或 wayland。rkmpp 硬件解码后端在两种会话下一致生效。
 #  网页视频硬解由 chromium-rkmpp.sh 负责（PPA + pin 1002 + chromium 132/126+rkmpp）。
 #
 #  两者**互不排斥，也不需要任何开关**：chromium-rkmpp 只碰 apt 源与 chromium、
@@ -121,7 +123,7 @@ function extension_prepare_config__rkmpp_mpv() {
 			;;
 	esac
 
-	display_alert "Extension: ${EXTENSION}" "RKMPP + mpv v3 stack (X11, native rkmpp backend) enabled for ${LINUXFAMILY}/${BRANCH}" "info"
+	display_alert "Extension: ${EXTENSION}" "RKMPP + mpv v3 stack (X11/Wayland, native rkmpp backend) enabled for ${LINUXFAMILY}/${BRANCH}" "info"
 	return 0
 }
 
@@ -138,6 +140,23 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	if _rkmpp_mpv__cannot_build_mpv; then
 		return 0
 	fi
+
+	# ---- 0.5 会话类型判定（X11 / Wayland）----
+	# X11 镜像：强制 gdm3/sddm 走 X11 + modesetting TearFree（rkmpp 零拷贝基线）。
+	# Wayland 镜像：*不* 强制 X11（否则把整个 Wayland 镜像变成 X11），mpv.conf 用
+	#   vo=gpu 自动选 wayland 上下文；rkmpp 后端在 Wayland 下同样生效。
+	# 默认值 x11（向后兼容 X11 工作流）。Wayland 工作流通过 userpatches/.rkmpp-mpv.env
+	# 写入 RKMPP_MPV_SESSION=wayland 告知（文件通道，规避 compile.sh 的 sudo 环境白名单
+	# 丢变量问题，见 chromium-rkmpp 同款做法）。
+	local RKMPP_MPV_SESSION="${RKMPP_MPV_SESSION:-}"
+	if [[ -z "${RKMPP_MPV_SESSION}" && -f "${SRC}/userpatches/.rkmpp-mpv.env" ]]; then
+		RKMPP_MPV_SESSION="$(. "${SRC}/userpatches/.rkmpp-mpv.env" 2>/dev/null; printf '%s' "${RKMPP_MPV_SESSION:-}")"
+	fi
+	RKMPP_MPV_SESSION="${RKMPP_MPV_SESSION:-x11}"
+	if [[ "${RKMPP_MPV_SESSION}" != "wayland" ]]; then
+		RKMPP_MPV_SESSION="x11"
+	fi
+	display_alert "Extension: ${EXTENSION}" "session target: ${RKMPP_MPV_SESSION}" "info"
 
 	# ---- 0. 定位扩展自带 assets（v3 脚本 + mpp.patch）----
 	# BASH_SOURCE[0] 指向本扩展文件；assets 置于同级的 rkmpp-mpv/ 子目录。
@@ -272,8 +291,11 @@ function post_install_kernel_debs__rkmpp_mpv() {
 		display_alert "Ensured cma=512M in armbianEnv.txt" "${EXTENSION}" "info"
 	fi
 
-	# ---- 5. 桌面会话强制 X11（rkmpp 零拷贝需 X11 + egl-x11/glx 上下文）----
+	# ---- 5. 桌面会话适配：X11 强制 / Wayland 不强制 ----
 	if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+		if [[ "${RKMPP_MPV_SESSION}" == "wayland" ]]; then
+			display_alert "Wayland session: NOT forcing X11 (rkmpp works under vo=gpu/wayland); skipping WaylandEnable=false + xorg TearFree" "${EXTENSION}" "info"
+		else
 		display_alert "Forcing X11 session (disabling Wayland) for rkmpp" "${EXTENSION}" "info"
 
 		# GNOME / gdm3: WaylandEnable=false
@@ -319,8 +341,9 @@ function post_install_kernel_debs__rkmpp_mpv() {
 			    Option "TearFree" "true"
 			EndSection
 		XORGCONF
-	fi
+		fi   # end if/else: wayland (no force) vs x11 (force)
+	fi      # end if BUILD_DESKTOP
 
-	display_alert "RKMPP+mpv v3 stack install complete" "${EXTENSION}" "info"
+	display_alert "RKMPP+mpv v3 stack install complete (session=${RKMPP_MPV_SESSION})" "${EXTENSION}" "info"
 	return 0
 }

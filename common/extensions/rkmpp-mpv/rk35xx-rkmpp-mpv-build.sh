@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# RK35xx X11 RKMPP + mpv 一键编译脚本（实测版 v3，官方 mpv + rkmpp 补丁路线）
+# RK35xx RKMPP + mpv 一键编译脚本（实测版 v3，官方 mpv + rkmpp 补丁路线）
 # -----------------------------------------------------------------------------
-# 适用 : RK3566 / RK3568 / RK3576 / RK3588，Armbian vendor 6.1 BSP 内核，X11 桌面
-# 发行版: X11 桌面下支持 noble / bookworm / trixie / jammy / resolute / deepin25
-#         （Wayland 会话不适用；meson<1.1 的发行版 jammy/bookworm 会自动 pip 升级）
+# 适用 : RK3566 / RK3568 / RK3576 / RK3588，Armbian vendor 6.1 BSP 内核，X11 / Wayland 桌面
+# 发行版: X11 / Wayland 桌面均支持 noble / bookworm / trixie / jammy / resolute / deepin25
+# 说明 : 同一份 mpv 二进制同时编译 x11 与 wayland 后端（-Dwayland=enabled）；
+#        mpv.conf 不写死 gpu-context，vo=gpu 按会话自动选 x11 或 wayland。
 # 路线 : mpp(gitee jellyfin-mpp) -> rkrga(gitee jellyfin-rga)
 #        -> ffmpeg-rockchip(gitee, 隔离 /usr/local/lib/ffmpeg-rkmpp)
 #        -> mpv(官方主线 v0.41.0 + nyanmisaka/boogiepop rkmpp 后端补丁 mpp.patch)
@@ -85,7 +86,7 @@ git_clone_retry() {
 }
 
 # -----------------------------------------------------------------------------
-# 发行版探测（支持 noble / bookworm / trixie / jammy / resolute，仅 X11 桌面）
+# 发行版探测（支持 noble / bookworm / trixie / jammy / resolute，X11 / Wayland 桌面）
 # -----------------------------------------------------------------------------
 SUPPORTED_DISTROS="jammy noble bookworm trixie resolute deepin25"
 detect_distro() {
@@ -110,11 +111,12 @@ detect_distro() {
     log "警告: 当前 codename '$DISTRO_CODENAME' 不在已验证列表 [$SUPPORTED_DISTROS]。"
     log "       脚本按通用 Debian/Ubuntu/Deepin X11 路径继续，但未经该发行版实测。"
   else
-    log "已验证发行版: $DISTRO_CODENAME（X11 桌面支持）"
+    log "已验证发行版: $DISTRO_CODENAME（X11 / Wayland 桌面支持）"
   fi
-  # 桌面会话检查：仅 X11 走 rkmpp-copy；Wayland 下本脚本不适用
+  # 桌面会话检查：同一份二进制同时支持 X11 与 Wayland（vo=gpu 自动选上下文），
+  # 不再要求切回 X11；仅在 Wayland 下提示 CMA 必须 >=512M（rkmpp 4K 前提）。
   if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
-    log "警告: 当前为 Wayland 会话，本脚本面向 X11。请切到 X11 桌面后运行，或自行调整 mpv.conf。"
+    log "检测到 Wayland 会话：mpv 将以 vo=gpu + wayland 上下文运行（rkmpp 后端同 X11 生效）。"
   fi
   # meson 版本兜底（bookworm=1.0.1 / jammy=0.61 均需升级；trixie/noble/resolute 用系统版）
   local mv; mv="$(meson --version 2>/dev/null || echo 0)"
@@ -184,7 +186,8 @@ install_deps() {
     libpulse-dev libpipewire-0.3-dev libasound2-dev \
     libgnutls28-dev \
     libplacebo-dev \
-    libxss-dev libxpresent-dev
+    libxss-dev libxpresent-dev \
+    wayland-protocols libwayland-dev libxkbcommon-dev
   # mpv >= 0.38 起 libplacebo 是硬依赖（meson.build: dependency('libplacebo', version: '>=6.338.2')）。
   # 发行版对照：trixie 7.349 ✓ / noble 6.338.2 ✓ / bookworm 5.229 ✗ / jammy ✗
   # 版本不足时提前报错，避免 meson 以 "Dependency not found" 形式难查地崩溃。
@@ -390,7 +393,7 @@ build_mpv() {
   rm -rf build
   meson setup build --prefix=/usr/local --buildtype=release \
     -Dx11=enabled -Dgl-x11=enabled -Degl-x11=enabled \
-    -Ddrm=enabled -Dwayland=disabled -Dlibmpv=true
+    -Ddrm=enabled -Dwayland=enabled -Dgl-wayland=enabled -Dlibmpv=true
   ninja -C build -j"${JOBS}"
   # 硬校验：rkmpp 驱动对象确实被编译出来（补丁生效 + ffmpeg-rockchip 头文件可见）
   if ! grep -q "rkmpp" build/video/out/hwdec/libmpv_static.a 2>/dev/null && \
@@ -508,8 +511,9 @@ configure_runtime() {
   log "== 配置 mpv.conf / udev / CMA =="
   mkdir -p /etc/mpv
   cat > /etc/mpv/mpv.conf <<'EOF'
-# RK35xx X11 — RKMPP 硬件加速配置
+# RK35xx RKMPP 硬件加速配置（X11 / Wayland 通用）
 # 桌面走 rkmpp-copy（双拷贝）；TTY/DRM 零拷贝见 mpv-lg4k.sh
+# vo=gpu 不写死 gpu-context：X11 会话自动选 egl-x11，Wayland 会话自动选 wayland
 fullscreen=yes          # 默认全屏播放（命令行临时退出全屏：mpv --fs=no <file>）
 keep-open=no            # 播完立即自动退出，不留住最后一帧窗口
 hwdec=rkmpp

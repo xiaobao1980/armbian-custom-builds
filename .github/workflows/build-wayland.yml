@@ -14,8 +14,10 @@ name: Build Armbian Image (Wayland 定制版)
 #      「出厂即把 chromium 换成 +rkmpp 版」这一步，见 common/extensions/chromium-rkmpp.sh。
 #    · 中文环境对所有发行版默认开启（jammy/noble 走 language-pack-*；
 #      trixie/bookworm 走 locales-all + 发行版自带翻译 + Noto CJK + AccountsService 会话语言）
-#    · 显示管理器按 Wayland 会话配置（gdm3 → WaylandEnable=true，覆盖 rkmpp-mpv 的强制 X11）
-#    · 不启用 rkmpp-mpv（它是 X11 专用栈，在 Wayland 下 mpv 拿不到 rkmpp 后端）
+#    · 显示管理器按 Wayland 会话配置（gdm3 → WaylandEnable=true，rkmpp-mpv 扩展检测到
+#      RKMPP_MPV_SESSION=wayland 后会跳过 WaylandEnable=false，不破坏 Wayland 会话）
+#    · 启用 rkmpp-mpv：mpv 二进制同时带 x11/wayland 后端，rkmpp 硬件解码在 Wayland 下同样
+#      生效（vo=gpu 自动选 wayland 上下文；CMA=512M 由扩展兜底写入 armbianEnv.txt）
 #  可配置：板卡 / 发行版 / 桌面 / 默认用户（用户名·密码·root 密码·附加组·
 #          sudo 免密·桌面自动登录）/ 中文环境 / 压缩格式 / runner / 是否发 Release
 # =============================================================================
@@ -203,6 +205,31 @@ jobs:
       - name: 同步板卡自定义文件 (仅该板卡, 互不干扰)
         run: bash scripts/sync-board-to-build.sh "${{ inputs.board }}" armbian-build
 
+      - name: 预拉 rkmpp-stack 预编译包 (避免 CI 6h 上限内编不完)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          D="armbian-build/userpatches/extensions/rkmpp-mpv/prebuilt"
+          mkdir -p "$D"
+          if command -v gh >/dev/null 2>&1; then
+            OK=0
+            # 顺序：当前发行版专用包优先（noble 走 wayland 版），再回退通用 trixie 包
+            for TAG in rkmpp-stack-v0.41.0-noble-arm64 rkmpp-stack-v0.41.0-2 rkmpp-stack-v0.41.0-1; do
+              if gh release download "$TAG" --repo "$GH_REPO" \
+                   --pattern 'rkmpp-stack_*_arm64.deb' --dir "$D"; then
+                echo "预编译包已就位（$TAG）:"; ls -lh "$D"; OK=1; break
+              fi
+              echo "::notice::$TAG 不可用，尝试下一个 tag"
+            done
+            if [ "$OK" != "1" ]; then
+              echo "::warning::预编译包下载失败, rkmpp-mpv 扩展将回退源码编译(可能撞 6h 上限)"
+            fi
+          else
+            echo "::warning::无 gh CLI, rkmpp-mpv 扩展将回退源码编译"
+          fi
+
       - name: 缓存 Armbian 构建产物 (kernel/uboot debs + rootfs, 加速重试)
         uses: actions/cache@v4
         with:
@@ -261,16 +288,22 @@ jobs:
           TIER_FINAL="${IN_TIER}"
           BRANCH_FINAL="${BRANCH}"
 
-          # Wayland 版只走 chromium-rkmpp；显式剔除 rkmpp-mpv（X11 专用栈，会强制
-          # WaylandEnable=false 且 mpv 在 Wayland 无 rkmpp 后端）
+          # Wayland 版：chromium-rkmpp + rkmpp-mpv（同一份 mpv 二进制同时带 x11/wayland
+          # 后端，rkmpp 在 Wayland 下同样生效；扩展内部按 RKMPP_MPV_SESSION=wayland
+          # 跳过 WaylandEnable=false，不会把 Wayland 镜像变成 X11）。
           EXT=""
           add_ext() { case ",${EXT}," in *",$1,"*) ;; *) EXT="${EXT:+${EXT},}$1" ;; esac; }
           [ -n "${IN_USER}" ] && add_ext default-user
           [ "${IN_CHINESE}" = "true" ] && add_ext rk35xx-chinese-desktop
           add_ext chromium-rkmpp
+          add_ext rkmpp-mpv
           # 兜底补 display-manager.service：chroot 里 deb-systemd-helper 只建 .wants，
           # 不建这个 Alias → gdm 路线会停在文字控制台（187 实测，见扩展头注释）
           add_ext desktop-dm
+
+          # 通知 rkmpp-mpv 扩展：这是 Wayland 镜像（文件通道，规避 sudo 环境白名单丢变量）。
+          mkdir -p armbian-build/userpatches
+          echo "RKMPP_MPV_SESSION=wayland" > armbian-build/userpatches/.rkmpp-mpv.env
 
           case "${IN_COMPRESS}" in
             7z)   COMPRESS="sha,img,7z" ;;
