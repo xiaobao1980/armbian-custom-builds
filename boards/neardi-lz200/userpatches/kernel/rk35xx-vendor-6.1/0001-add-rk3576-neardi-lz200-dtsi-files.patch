@@ -1319,9 +1319,12 @@ index 000000000000..71f8415db91c
 +        compatible = "seekwave,sv6160";
 +        dma_type = <1>;
 +        status = "okay";
-+        //skw_iram_path = "/lib/firmware/ROM_EXEC_KERNEL_IRAM.bin";
-+        //skw_dram_path = "/lib/firmware/RAM_RW_KERNEL_DRAM.bin";
-+        //seekwave_nv_name = "SEEKWAVE_NV_SWT6652.bin";
++        /* 官方 dtsi 注释掉了下面三行 -> NV 校准不下载 (request_firmware (null) fail)。
++         * 2026-11-04 r8 实测：补上后 btseekwave_download_nv 真正执行，SKWBOOT_ERR 清零。
++         * iram/dram 与驱动 SDIO 总线默认同名；NV 用官方 Wiki 对 SWT6652x(SDIO) 指定的 SHARE 版 */
++        skw_iram_path = "SWT6652_IRAM_SDIO.bin";
++        skw_dram_path = "SWT6652_DRAM_SDIO.bin";
++        seekwave_nv_name = "SEEKWAVE_NV_SWT6652_SHARE.bin";
 +    };
 +};
 +
