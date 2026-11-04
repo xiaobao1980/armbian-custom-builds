@@ -6,7 +6,7 @@
 # 发行版: X11 / Wayland 桌面均支持 noble / bookworm / trixie / jammy / resolute / deepin25
 # 说明 : 同一份 mpv 二进制同时编译 x11 与 wayland 后端（-Dwayland=enabled）；
 #        mpv.conf 不写死 gpu-context，vo=gpu 按会话自动选 x11 或 wayland。
-# 路线 : mpp(gitee jellyfin-mpp) -> rkrga(gitee jellyfin-rga)
+# 路线 : mpp(github nyanmisaka/mpp) -> rkrga(github nyanmisaka/rk-mirrors, gitee 兜底)
 #        -> ffmpeg-rockchip(gitee, 隔离 /usr/local/lib/ffmpeg-rkmpp)
 #        -> mpv(官方主线 v0.41.0 + nyanmisaka/boogiepop rkmpp 后端补丁 mpp.patch)
 # 说明 : mpv 官方主线 v0.41.0 的 video/out/hwdec/ 仅有 drmprime 帧格式后端，
@@ -261,11 +261,12 @@ build_mpp() {
 # rkrga (gitee jellyfin-rga)
 # -----------------------------------------------------------------------------
 build_rga() {
-  log "== 编译 rkrga (gitee jellyfin-rga) =="
+  log "== 编译 rkrga (jellyfin-rga) =="
   cd "$SRC_DIR"
-  # 注：rga 的 jellyfin-rga 分支仅在 gitee 维护（github 无同名仓库，
-  # nyanmisaka/librga 也无该分支），故只用 gitee，靠重试解决偶发 early EOF。
+  # 首选 github nyanmisaka/rk-mirrors（作者官方镜像，jellyfin-rga 分支同 commit 1d330cc），
+  # CI 上 gitee 会间歇性对 Actions IP 段返回 HTTP 400（run 41842224577 实锤），gitee 仅作兜底。
   git_clone_retry jellyfin-rga rkrga \
+    https://github.com/nyanmisaka/rk-mirrors.git \
     https://gitee.com/nyanmisaka/rga.git
   cd rkrga
   meson setup build --prefix=/usr/local --buildtype=release \
