@@ -577,10 +577,13 @@ rk_cn_setup_chromium_zh() {
 # 中文界面（customize: rk35xx-chinese-desktop）
 # 变量一律用 ${VAR:-} 形式：若 wrapper 开了 set -u 且变量未初始化，裸引用会整条报错
 export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:-} --lang=zh-CN"
+# Wayland 原生模式下 IME 必须显式开启，否则 ibus 中文输入进不了 Chromium（187 实测：文本能打、Chromium 打不出）
+export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:-} --enable-wayland-ime"
 EOF
 	chmod 644 /etc/chromium.d/99-rk-zh
 	cat > /etc/chromium-browser/customizations/50-rk-zh <<'EOF'
 export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:-} --lang=zh-CN"
+export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:-} --enable-wayland-ime"
 EOF
 	chmod 644 /etc/chromium-browser/customizations/50-rk-zh
 
