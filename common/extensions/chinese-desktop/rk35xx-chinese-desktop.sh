@@ -71,6 +71,35 @@ rk_cn_ensure_dns() {
 	getent hosts "${probe}" >/dev/null 2>&1 && log "DNS 自检: ✓ 复验通过" || log "DNS 自检: ✗ 复验仍失败"
 }
 
+# 0b. apt 索引自检（2026-11-05 r12 实锤的第二个时序坑）
+# 扩展在 customize-image 早期执行，而 Armbian 把宿主 apt lists 注入 rootfs
+# 是在之后（r12 日志：扩展 16:20 装包，apt lists 注入 16:31）。此时 DNS 正常，
+# 但 apt-cache show ibus-rime / fonts-noto-cjk 全部查不到 → apt-get 返回 rc=100
+# 「Unable to locate package」，重试 3 次也没用。表现：中文 locale/翻译正常，
+# 唯独字体与输入法引擎缺失（rime-ice 配置却已部署）。
+rk_cn_prepare_apt() {
+	rk_cn_ensure_dns
+	local probes="ibus-rime fonts-noto-cjk"
+	local missing=""
+	local p
+	for p in ${probes}; do
+		apt-cache show "${p}" >/dev/null 2>&1 || missing="${missing} ${p}"
+	done
+	if [ -z "${missing}" ]; then
+		log "apt 索引自检: 所需包可见，无需 update"
+		return 0
+	fi
+	log "apt 索引自检: 缺${missing} → 扩展早于 apt lists 注入，先 apt-get update"
+	apt-get update -qq -o Acquire::Retries=3 >>/tmp/rk-cn-apt.log 2>&1 \
+		|| log "警告: apt-get update 失败（$(tail -2 /tmp/rk-cn-apt.log 2>/dev/null | tr '\n' ' ')）"
+	missing=""
+	for p in ${probes}; do
+		apt-cache show "${p}" >/dev/null 2>&1 || missing="${missing} ${p}"
+	done
+	[ -n "${missing}" ] && log "apt 索引自检: ✗ update 后仍缺${missing}" \
+		|| log "apt 索引自检: ✓ 修复后可见"
+}
+
 # 发行版判定（Ubuntu 有 PPA；Debian 无）
 rk_cn_os_id() { ( . /etc/os-release 2>/dev/null; printf '%s' "${ID:-}" ); }
 rk_cn_is_ubuntu() {
@@ -293,7 +322,7 @@ EOF
 	local font_ok=0
 	for p in fonts-noto-cjk fonts-noto-cjk-extra fonts-wqy-zenhei fonts-wqy-microhei \
 		fonts-arphic-uming fonts-arphic-ukai; do
-		if have_pkg "${p}" && apt-get install -y -qq "${p}" >/dev/null 2>&1; then
+		if have_pkg "${p}" && apt-get install -y -qq "${p}" >>/tmp/rk-cn-apt.log 2>&1; then
 			font_ok=$((font_ok + 1))
 		fi
 	done
@@ -478,12 +507,12 @@ rk_cn_ime_ibus() {
 	local rc=1 i=0
 	for i in 0 1 2; do
 		apt-get install -y -qq -o Acquire::Retries=3 \
-			ibus ibus-gtk3 ibus-gtk4 ibus-rime librime-data >/dev/null 2>&1
+			ibus ibus-gtk3 ibus-gtk4 ibus-rime librime-data >>/tmp/rk-cn-apt.log 2>&1
 		rc=$?
 		if [ "${rc}" -eq 0 ] && dpkg -s ibus-rime >/dev/null 2>&1; then
 			break
 		fi
-		log "ibus-rime 第 $((i+1)) 次安装失败（rc=${rc}），重试"
+		log "ibus-rime 第 $((i+1)) 次安装失败（rc=${rc}）：$(tail -3 /tmp/rk-cn-apt.log 2>/dev/null | tr '\n' ' ')"
 	done
 	if [ "${rc}" -ne 0 ] || ! dpkg -s ibus-rime >/dev/null 2>&1; then
 		log "警告: ibus-rime 未装上，仍写 ibus 环境变量避免输入链路裸奔"
@@ -618,6 +647,8 @@ EOF
 # main
 # ============================================================
 rk_cn_setup_user
+# ⚠️ 必须在任何 apt 装包之前：扩展执行早于宿主 apt lists 注入（见 rk_cn_prepare_apt）
+rk_cn_prepare_apt
 rk_cn_setup_locale_tz_fonts
 
 if [ "${RK_CN_BUILD_DESKTOP}" = "yes" ]; then
