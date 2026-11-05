@@ -155,7 +155,10 @@ DMODE="${DMODE:-user}"
 
 # ---------------------------------------------------------------- INI 写值
 # 就地修改 ini 的某个 [section] 下的 key，保留文件里其它内容。
-# gdm3 不支持 drop-in（只读 /etc/gdm3/custom.conf），必须原地改。
+# gdm3 不支持 drop-in，必须原地改；且 Debian/Ubuntu 读的文件不同：
+#   · Debian trixie/bookworm: 主配置 /etc/gdm3/daemon.conf（custom.conf 被忽略）
+#   · Ubuntu noble/jammy   : /etc/gdm3/custom.conf
+# 故自动登录键两处都写，见 setup_autologin() 的 gdm3 分支。
 set_ini() {
 	local f="$1" sec="$2" key="$3" val="$4"
 	[ -f "$f" ] || : >"$f"
@@ -314,12 +317,28 @@ setup_autologin() {
 		;;
 	gdm3)
 		mkdir -p /etc/gdm3
-		set_ini /etc/gdm3/custom.conf daemon AutomaticLoginEnable true
-		set_ini /etc/gdm3/custom.conf daemon AutomaticLogin "$DUSER"
-		case "$DSESSION_TYPE" in
-			x11) set_ini /etc/gdm3/custom.conf daemon WaylandEnable false ;;
-			wayland) set_ini /etc/gdm3/custom.conf daemon WaylandEnable true ;;
-		esac
+		# Debian trixie 的 gdm3 二进制只带 /etc/gdm3/daemon.conf 路径，
+		# /usr/share/gdm/generate-config 生成的 /run/gdm3/custom.conf 不含
+		# 自动登录键 → 只写 custom.conf 会静默失效（188 板 r12 实锤：
+		# 开机走 gdm-password 输密码；同步写 daemon.conf 后重启 GDM
+		# 立即变成 gdm-autologin 免密会话）。Ubuntu 仍读 custom.conf。
+		# 两处都写、值一致，兼容两种发行版：custom.conf 缺失时先创建
+		# （Ubuntu 靠它），daemon.conf 仅在已存在时写（不凭空造不完整配置）。
+		[ -f /etc/gdm3/custom.conf ] || : > /etc/gdm3/custom.conf
+		for gdm_conf in /etc/gdm3/custom.conf /etc/gdm3/daemon.conf; do
+			[ -f "$gdm_conf" ] || continue
+			set_ini "$gdm_conf" daemon AutomaticLoginEnable true
+			set_ini "$gdm_conf" daemon AutomaticLogin "$DUSER"
+			case "$DSESSION_TYPE" in
+				x11) set_ini "$gdm_conf" daemon WaylandEnable false ;;
+				wayland) set_ini "$gdm_conf" daemon WaylandEnable true ;;
+			esac
+		done
+		if grep -qs "^AutomaticLoginEnable=true" /etc/gdm3/custom.conf /etc/gdm3/daemon.conf; then
+			log "gdm3 自动登录: custom.conf + daemon.conf 双写完成，用户=${DUSER}"
+		else
+			log "警告: gdm3 自动登录键未落地（custom.conf / daemon.conf 都不含 AutomaticLoginEnable=true）"
+		fi
 		;;
 	sddm)
 		mkdir -p /etc/sddm.conf.d
