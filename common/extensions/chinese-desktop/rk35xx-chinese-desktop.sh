@@ -80,6 +80,9 @@ rk_cn_ensure_dns() {
 rk_cn_prepare_apt() {
 	rk_cn_ensure_dns
 	local probes="ibus-rime fonts-noto-cjk"
+	# Debian 原版 chromium 的界面翻译在 chromium-l10n（locales/zh-CN.pak），
+	# 缺了它 --lang=zh-CN 也只会显示英文界面（188 板 r12 实测）。
+	command -v chromium >/dev/null 2>&1 && probes="${probes} chromium-l10n"
 	local missing=""
 	local p
 	for p in ${probes}; do
@@ -595,10 +598,17 @@ rk_cn_setup_chromium_zh() {
 	fi
 
 	log "Chromium 中文化（二进制: ${bin}）"
-	# 中文语言包
-	apt-get install -y -qq --allow-downgrades "${bin}-l10n" >/dev/null 2>&1 \
-		|| apt-get install -y -qq chromium-l10n >/dev/null 2>&1 \
-		|| log "提示: chromium-l10n 不可用，界面语由 --lang=zh-CN 保证"
+	# 中文语言包：⚠️ --lang=zh-CN 只决定选哪个 locale，界面字符串本体在
+	# /usr/lib/chromium/locales/zh-CN.pak（chromium-l10n）。缺包 = 参数在、界面仍英文。
+	# apt 输出留档 + 终验 pak（原实现 >/dev/null 静默失败，r12 就是这样漏掉的）。
+	apt-get install -y -qq --allow-downgrades "${bin}-l10n" >>/tmp/rk-cn-apt.log 2>&1 \
+		|| apt-get install -y -qq chromium-l10n >>/tmp/rk-cn-apt.log 2>&1 \
+		|| true
+	if ls /usr/lib/chromium/locales/zh-CN.pak /usr/lib/chromium-browser/locales/zh-CN.pak >/dev/null 2>&1; then
+		log "Chromium 中文界面资源就位（zh-CN.pak）"
+	else
+		log "错误: chromium-l10n 未装上（zh-CN.pak 缺失）→ Chromium 界面会回落英文！$(tail -3 /tmp/rk-cn-apt.log 2>/dev/null | tr '\n' ' ')"
+	fi
 
 	# 启动参数目录（Debian 原版 /etc/chromium.d；rkmpp 版 /etc/chromium-browser/customizations）
 	mkdir -p /etc/chromium.d /etc/chromium-browser/customizations
