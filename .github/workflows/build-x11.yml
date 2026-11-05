@@ -293,6 +293,8 @@ jobs:
           add_ext desktop-dm
           # 蓝牙音频设备开机自动回连（BlueZ 不会主动连 A2DP/HFP，188 板冷启动实测）
           add_ext bluetooth-autoconnect
+          # 每次开机强制 NTP 校时（无 RTC 电池板上电时间归零，chrony/timesyncd 渐进同步不够）
+          add_ext ntp-boot-sync
 
           # ---- 5. 压缩格式 ----
           case "${IN_COMPRESS}" in
