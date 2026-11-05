@@ -300,6 +300,8 @@ jobs:
           # 兜底补 display-manager.service：chroot 里 deb-systemd-helper 只建 .wants，
           # 不建这个 Alias → gdm 路线会停在文字控制台（187 实测，见扩展头注释）
           add_ext desktop-dm
+          # 蓝牙音频设备开机自动回连（BlueZ 不会主动连 A2DP/HFP，188 板冷启动实测）
+          add_ext bluetooth-autoconnect
 
           # 通知 rkmpp-mpv 扩展：这是 Wayland 镜像（文件通道，规避 sudo 环境白名单丢变量）。
           mkdir -p armbian-build/userpatches

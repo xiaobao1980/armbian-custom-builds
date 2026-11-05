@@ -291,6 +291,8 @@ jobs:
           # 兜底补 display-manager.service：chroot 里 deb-systemd-helper 只建 .wants，
           # 不建这个 Alias → gdm/gnome 路线会停在文字控制台（187 实测，见扩展头注释）
           add_ext desktop-dm
+          # 蓝牙音频设备开机自动回连（BlueZ 不会主动连 A2DP/HFP，188 板冷启动实测）
+          add_ext bluetooth-autoconnect
 
           # ---- 5. 压缩格式 ----
           case "${IN_COMPRESS}" in
