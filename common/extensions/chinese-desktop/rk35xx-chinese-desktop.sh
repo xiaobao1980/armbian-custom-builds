@@ -604,8 +604,19 @@ rk_cn_setup_chromium_zh() {
 	apt-get install -y -qq --allow-downgrades "${bin}-l10n" >>/tmp/rk-cn-apt.log 2>&1 \
 		|| apt-get install -y -qq chromium-l10n >>/tmp/rk-cn-apt.log 2>&1 \
 		|| true
-	if ls /usr/lib/chromium/locales/zh-CN.pak /usr/lib/chromium-browser/locales/zh-CN.pak >/dev/null 2>&1; then
-		log "Chromium 中文界面资源就位（zh-CN.pak）"
+	# ⚠️ 不能写成 ls 路径A 路径B：Debian 的 chromium-l10n 只装路径 A，
+	# 路径 B 不存在时 ls 仍返回 2 → r17 日志出现「zh-CN.pak 缺失」假阴性。
+	# 逐个 -f 判定，并把实际命中的路径写进日志方便 CI 审计。
+	local pak=""
+	local candidate
+	for candidate in /usr/lib/chromium/locales/zh-CN.pak /usr/lib/chromium-browser/locales/zh-CN.pak; do
+		if [ -f "${candidate}" ]; then
+			pak="${candidate}"
+			break
+		fi
+	done
+	if [ -n "${pak}" ]; then
+		log "Chromium 中文界面资源就位（${pak}）"
 	else
 		log "错误: chromium-l10n 未装上（zh-CN.pak 缺失）→ Chromium 界面会回落英文！$(tail -3 /tmp/rk-cn-apt.log 2>/dev/null | tr '\n' ' ')"
 	fi
