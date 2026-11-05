@@ -33,8 +33,11 @@
 #      开机后 35s 起 8/8 采样全 Connected: yes；
 #    - 手动 disconnect → t=3s no → t=28s yes（守护自愈）。
 #
-#  注：`bluetoothctl devices Paired` 需 BlueZ ≥ 5.70（noble/trixie 均满足）；
-#      更老的发行版请改用 `bluetoothctl paired-devices`。
+#  可移植性：脚本对 BlueZ 版本做了兜底（`devices Paired` 不可用时退回全版本
+#      通用的 `devices`，由循环里的 Paired/Trusted 检查过滤），因此
+#      noble / jammy / bookworm / trixie 都适用。守护只走 BlueZ D-Bus，
+#      不打开任何硬件节点，与 SoC、板型、蓝牙芯片、X11/Wayland 会话、
+#      是否自动登录均无关；唯一硬要求是 systemd + bluez。
 # =============================================================================
 
 function post_armbian_repo_customize_image__bluetooth_autoconnect() {
@@ -78,7 +81,11 @@ while :; do
     if [ -n "${MACS:-}" ]; then
         DEVS="$MACS"
     else
-        DEVS=$(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}')
+        # `devices Paired` 过滤参数是较新 BlueZ 才有；老版本返回空/报错时
+        # 退回全版本通用的 `devices`（循环里的 Paired+Trusted 检查会过滤）。
+        # 这样同一份脚本在 noble / jammy / bookworm / trixie 都能用。
+        DEVS=$(bluetoothctl devices Paired 2>/dev/null | awk '/^Device /{print $2}')
+        [ -z "$DEVS" ] && DEVS=$(bluetoothctl devices 2>/dev/null | awk '/^Device /{print $2}')
     fi
     for mac in $DEVS; do
         st=$(bluetoothctl info "$mac" 2>/dev/null)
