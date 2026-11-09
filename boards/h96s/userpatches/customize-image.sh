@@ -21,7 +21,14 @@ Main() {
 	# 桌面板卡: 移除 VLC。Armbian 桌面任务(XFCE/GNOME mid 档)默认拉入 VLC,
 	# 但 RK 平台 VLC 无法走 Rockchip rkmpp 硬解, 4K60 VP9 软解会花屏+卡顿;
 	# 硬解由 mpv(rkmpp) 承担。彻底从镜像剔除 VLC。
-	[[ "${BUILD_DESKTOP}" == "yes" ]] && RemoveUnwantedPackages
+	# ⚠️ 必须写成 if，不能写 `[[ ... ]] && Func`：Armbian 用
+	# `bash -e -o pipefail -c "$*"` 调用本脚本（lib/functions/logging/runners.sh:175），
+	# 脚本最后一条语句的返回值就是整个 chroot 的返回值。`&&` 在条件为假时返回 1，
+	# 会让 BUILD_DESKTOP=no 的 server/minimal 镜像在 customize_image 阶段
+	# 「0 秒、无任何输出、Error 1」直接失败（见 run 42596545537）。
+	if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+		RemoveUnwantedPackages
+	fi
 	case $RELEASE in
 		stretch)
 			# your code here
@@ -41,7 +48,10 @@ Main() {
 			;;
 		noble)
 			# Chinese desktop language support (Chromium UI / CJK fonts / pinyin IME)
-			[[ "${BUILD_DESKTOP}" == "yes" ]] && InstallChineseDesktopSupport
+			# 同上：case 分支的返回值会成为 Main() 的返回值，这里同样不能用 `&&`。
+			if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+				InstallChineseDesktopSupport
+			fi
 			;;
 	esac
 } # Main
