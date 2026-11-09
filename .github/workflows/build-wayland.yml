@@ -140,6 +140,28 @@ on:
           - ubuntu-24.04-arm
           - ubuntu-latest
 
+      kernel_uboot_mode:
+        description: "内核 + U-Boot 构件来源 (reuse=复用历史已编译 debs; fresh=不用历史 debs, 源码全新编译, rootfs 仍复用; fresh-strict=连 rootfs/远程 OCI 也全部禁用, 最慢)"
+        type: choice
+        required: false
+        default: reuse
+        options:
+          - reuse
+          - fresh
+          - fresh-strict
+
+      cache_tag:
+        description: "指定历史缓存基线: 填构建 run number (Release 里的 r17 -> 填 17); 留空 = 自动选最新一次"
+        type: string
+        required: false
+        default: ""
+
+      save_cache:
+        description: "把本次编译产物存成新的历史基线 (供以后 reuse / cache_tag 选用)"
+        type: boolean
+        required: false
+        default: true
+
       publish_release:
         description: "构建成功后发布到 GitHub Releases"
         type: boolean
@@ -230,16 +252,98 @@ jobs:
             echo "::warning::无 gh CLI, rkmpp-mpv 扩展将回退源码编译"
           fi
 
-      - name: 缓存 Armbian 构建产物 (kernel/uboot debs + rootfs, 加速重试)
-        uses: actions/cache@v4
+      - name: 计算构件缓存键 (kernel/u-boot 与 rootfs 分离)
+        id: cache-key
+        env:
+          IN_BOARD: ${{ inputs.board }}
+          IN_REL: ${{ inputs.release }}
+          IN_DE: ${{ inputs.desktop_environment }}
+          IN_TIER: ${{ inputs.desktop_tier }}
+          IN_REF: ${{ inputs.build_ref }}
+          IN_TAG: ${{ inputs.cache_tag }}
+          KU_HASH: ${{ hashFiles(format('boards/{0}/userpatches/kernel/**', inputs.board), format('boards/{0}/userpatches/u-boot/**', inputs.board), format('boards/{0}/config/**', inputs.board), format('boards/{0}/build.env', inputs.board)) }}
+          ROOTFS_HASH: ${{ hashFiles('common/extensions/**', 'scripts/**', format('boards/{0}/userpatches/overlay/**', inputs.board)) }}
+        run: |
+          set -euo pipefail
+          [[ "${IN_TAG}" =~ ^[0-9]+$ || -z "${IN_TAG}" ]] \
+            || { echo "::error::cache_tag 只能是构建 run number (纯数字), 收到 '${IN_TAG}'"; exit 1; }
+          REF="${IN_REF//\//_}"
+          PREFIX="armbian-wayland"
+          DEBS_BASE="${PREFIX}-debs-${IN_BOARD}-${IN_REL}-${IN_DE}-${REF}-${KU_HASH}-v2"
+          ROOTFS_BASE="${PREFIX}-rootfs-${IN_BOARD}-${IN_REL}-${IN_DE}-${IN_TIER}-${REF}-${ROOTFS_HASH}-v2"
+          SUFFIX="r${GITHUB_RUN_NUMBER}-a${GITHUB_RUN_ATTEMPT}"
+          if [ -n "${IN_TAG}" ]; then
+            DEBS_RESTORE="${DEBS_BASE}-r${IN_TAG}-a1"
+            ROOTFS_RESTORE="${ROOTFS_BASE}-r${IN_TAG}-a1"
+          else
+            DEBS_RESTORE="${DEBS_BASE}-auto"
+            ROOTFS_RESTORE="${ROOTFS_BASE}-auto"
+          fi
+          {
+            echo "debs_restore=${DEBS_RESTORE}"
+            echo "debs_save=${DEBS_BASE}-${SUFFIX}"
+            echo "rootfs_restore=${ROOTFS_RESTORE}"
+            echo "rootfs_save=${ROOTFS_BASE}-${SUFFIX}"
+            echo "tag=${IN_TAG}"
+            echo "debs_restore_keys<<DEBS_EOF"
+            if [ -n "${IN_TAG}" ]; then echo "${DEBS_BASE}-r${IN_TAG}-"; fi
+            echo "${DEBS_BASE}-"
+            echo "DEBS_EOF"
+            echo "rootfs_restore_keys<<ROOTFS_EOF"
+            if [ -n "${IN_TAG}" ]; then echo "${ROOTFS_BASE}-r${IN_TAG}-"; fi
+            echo "${ROOTFS_BASE}-"
+            echo "ROOTFS_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "kernel/u-boot 缓存基线: ${DEBS_BASE}-"
+          echo "rootfs 缓存基线       : ${ROOTFS_BASE}-"
+          echo "本次保存为            : ...-${SUFFIX}  (以后 cache_tag 填 ${GITHUB_RUN_NUMBER} 即可精确复用)"
+
+      - name: 恢复历史 kernel/u-boot debs (reuse 模式)
+        id: debs-cache
+        if: ${{ inputs.kernel_uboot_mode == 'reuse' }}
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            armbian-build/output/debs
-            armbian-build/cache/rootfs
-          key: armbian-wayland-${{ inputs.board }}-${{ inputs.release }}-${{ inputs.desktop_environment }}-v1
-          restore-keys: |
-            armbian-wayland-${{ inputs.board }}-${{ inputs.release }}-
-            armbian-wayland-${{ inputs.board }}-
+          path: armbian-build/output/debs
+          key: ${{ steps.cache-key.outputs.debs_restore }}
+          restore-keys: ${{ steps.cache-key.outputs.debs_restore_keys }}
+
+      - name: 恢复 rootfs 缓存
+        id: rootfs-cache
+        if: ${{ inputs.kernel_uboot_mode != 'fresh-strict' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: armbian-build/cache/rootfs
+          key: ${{ steps.cache-key.outputs.rootfs_restore }}
+          restore-keys: ${{ steps.cache-key.outputs.rootfs_restore_keys }}
+
+      - name: 校验指定的历史缓存基线
+        if: ${{ inputs.cache_tag != '' }}
+        env:
+          IN_TAG: ${{ inputs.cache_tag }}
+          DEBS_MATCHED: ${{ steps.debs-cache.outputs.cache-matched-key }}
+          ROOTFS_MATCHED: ${{ steps.rootfs-cache.outputs.cache-matched-key }}
+          MODE: ${{ inputs.kernel_uboot_mode }}
+        run: |
+          set -euo pipefail
+          if [ "${MODE}" = "reuse" ] && [[ "${DEBS_MATCHED}" != *"-r${IN_TAG}-"* ]]; then
+            echo "::error::指定的历史基线 r${IN_TAG} 未命中 (实际: ${DEBS_MATCHED:-无})。请留空 cache_tag 用自动最新，或从以往构建日志里挑一个真实的 run number。"
+            exit 1
+          fi
+          echo "历史基线 r${IN_TAG}: debs='${DEBS_MATCHED:-未恢复(fresh)}' rootfs='${ROOTFS_MATCHED:-无}'"
+
+      - name: "全新编译模式: 清空历史 kernel/u-boot debs"
+        if: ${{ inputs.kernel_uboot_mode != 'reuse' }}
+        run: |
+          set -euo pipefail
+          mkdir -p armbian-build/output/debs
+          n=$(find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f | wc -l)
+          find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f -delete
+          echo "::notice::已跳过历史 debs 缓存并清空 ${n} 个文件, kernel/u-boot 将从源码编译"
+          if [ "${{ inputs.kernel_uboot_mode }}" = "fresh-strict" ]; then
+            echo "::notice::fresh-strict: 额外传 ARTIFACT_IGNORE_CACHE=yes, 连 rootfs 与远程 OCI 缓存也全部禁用 (最慢)"
+          else
+            echo "::notice::fresh: rootfs 缓存仍复用, 只有 kernel/u-boot 全新编译"
+          fi
 
       - name: 校验用户设置 + 组装构建参数
         id: args
@@ -454,12 +558,14 @@ jobs:
             中文环境    : ${{ inputs.chinese }}   (所有发行版默认开启)
             扩展        : ${{ steps.args.outputs.extensions }}
             压缩        : ${{ inputs.compress }}
+          构件模式    : ${{ inputs.kernel_uboot_mode }}   历史基线: ${{ inputs.cache_tag == '' && '最新' || inputs.cache_tag }}
           ────────────────────────────────────────────────
           最终参数: ${{ steps.args.outputs.args }}
           EOF
 
       - name: 编译镜像
         env:
+          RK_STRICT_ARGS: ${{ inputs.kernel_uboot_mode == 'fresh-strict' && 'ARTIFACT_IGNORE_CACHE=yes' || '' }}
           DEFAULT_USER_NAME: ${{ inputs.user_name }}
           DEFAULT_USER_PASSWORD: ${{ inputs.user_password }}
           DEFAULT_ROOT_PASSWORD: ${{ inputs.root_password }}
@@ -481,12 +587,39 @@ jobs:
             EXPERT=yes \
             SHARE_LOG=yes \
             COMPRESS_OUTPUTIMAGE=${{ steps.args.outputs.compress }} \
+            ${RK_STRICT_ARGS} \
             build
 
       # 双保险：扩展读后已自删；这里兜住「扩展没跑到/编译中途失败」的残留
       - name: 清理用户凭据文件 (无论成败)
         if: always()
         run: rm -f armbian-build/userpatches/.default-user.env && echo "凭据文件已清理"
+
+      - name: 检查可保存的构件
+        id: cache-payload
+        if: ${{ success() && inputs.save_cache }}
+        run: |
+          set -euo pipefail
+          DEBS=no; ROOTFS=no
+          [ -d armbian-build/output/debs ] && [ -n "$(ls -A armbian-build/output/debs 2>/dev/null)" ] && DEBS=yes
+          [ -d armbian-build/cache/rootfs ] && [ -n "$(ls -A armbian-build/cache/rootfs 2>/dev/null)" ] && ROOTFS=yes
+          echo "debs=${DEBS}" >> "$GITHUB_OUTPUT"
+          echo "rootfs=${ROOTFS}" >> "$GITHUB_OUTPUT"
+          echo "待保存构件: debs=${DEBS} rootfs=${ROOTFS}"
+
+      - name: 保存 kernel/u-boot debs 为新历史基线
+        if: ${{ success() && inputs.save_cache && steps.cache-payload.outputs.debs == 'yes' && (inputs.kernel_uboot_mode != 'reuse' || steps.debs-cache.outputs.cache-matched-key == '') }}
+        uses: actions/cache/save@v4
+        with:
+          path: armbian-build/output/debs
+          key: ${{ steps.cache-key.outputs.debs_save }}
+
+      - name: 保存 rootfs 为新历史基线
+        if: ${{ success() && inputs.save_cache && steps.cache-payload.outputs.rootfs == 'yes' && steps.rootfs-cache.outputs.cache-matched-key == '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: armbian-build/cache/rootfs
+          key: ${{ steps.cache-key.outputs.rootfs_save }}
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4
