@@ -168,19 +168,16 @@ jobs:
             echo "原生 arm64 runner, 无需 qemu binfmt"
             exit 0
           fi
-          sudo apt-get update -qq
-          # qemu-user-static 自带带 F(fix-binary) 标志的注册项, 容器内也能用
-          sudo apt-get install -y -qq qemu-user-static binfmt-support
-          sudo systemctl restart systemd-binfmt 2>/dev/null || true
-          sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
-          sudo update-binfmts --enable qemu-arm 2>/dev/null || true
-          if ! ls /proc/sys/fs/binfmt_misc/ | grep -qi 'aarch64'; then
-            echo "apt 注册失败, 改用 tonistiigi/binfmt 兜底"
-            docker run --privileged --rm tonistiigi/binfmt --install arm64,arm
-          fi
+          # 用 docker/tonistiigi/binfmt 注册, 自带 fix-binary(F) 标志, chroot 容器内也能用。
+          # 不再走 apt 装 qemu-user-static —— 新版 GitHub runner 镜像里该包已无安装候选,
+          # 会直接 'E: Package qemu-user-static has no installation candidate' 退出码 100 失败。
+          PLAT=arm64,arm
+          [ "$(uname -m)" = "aarch64" ] && PLAT=arm
+          docker run --privileged --rm tonistiigi/binfmt --install "$PLAT"
           echo "--- binfmt_misc 已注册:"
           ls /proc/sys/fs/binfmt_misc/
-          grep -h '^enabled\|^disabled' /proc/sys/fs/binfmt_misc/qemu-aarch64 || true
+          grep -h '^enabled\|^disabled' /proc/sys/fs/binfmt_misc/qemu-aarch64 \
+            || grep -hl 'aarch64' /proc/sys/fs/binfmt_misc/* 2>/dev/null || true
 
       - name: Clone armbian/build (${{ inputs.build_ref }})
         run: |
