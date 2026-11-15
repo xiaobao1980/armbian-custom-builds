@@ -399,6 +399,8 @@ jobs:
           add_ext bluetooth-autoconnect
           # 每次开机强制 NTP 校时（无 RTC 电池板上电时间归零，chrony/timesyncd 渐进同步不够）
           add_ext ntp-boot-sync
+          # 构建时去除 DTB 写死 MAC，让 RK 厂商内核从 efuse/cpuid 派生每板唯一 MAC
+          add_ext dtb-no-mac
 
           # ---- 5. 压缩格式 ----
           case "${IN_COMPRESS}" in
