@@ -394,7 +394,11 @@ jobs:
           # Wayland 版：chromium-rkmpp + rkmpp-mpv（同一份 mpv 二进制同时带 x11/wayland
           # 后端，rkmpp 在 Wayland 下同样生效；扩展内部按 RKMPP_MPV_SESSION=wayland
           # 跳过 WaylandEnable=false，不会把 Wayland 镜像变成 X11）。
-          EXT=""
+          # 以 build.env 的 ENABLE_EXTENSIONS 为基底（板级扩展如 radxa-aic8800 wifi
+          # DKMS、wk2xxx-aio3288c 串口驱动都在里面），再叠加下方的公共扩展。
+          # 此前写 EXT="" 丢掉 build.env 基底 → h96s wayland 镜像缺 aic8800 驱动，
+          # wifi 无 wlan0、蓝牙固件(combo 芯片依赖 wifi 驱动加载)无响应（103 实测）。
+          EXT="${ENABLE_EXTENSIONS:-}"
           add_ext() { case ",${EXT}," in *",$1,"*) ;; *) EXT="${EXT:+${EXT},}$1" ;; esac; }
           [ -n "${IN_USER}" ] && add_ext default-user
           [ "${IN_CHINESE}" = "true" ] && add_ext rk35xx-chinese-desktop
