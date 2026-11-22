@@ -1,0 +1,170 @@
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3568-neardi-lpa3568-hdmirx.dtsi
+@@ -0,0 +1,156 @@
++/* for rk628 */
++/* hdmi to csi */
++/ {
++	rk628f_dc: rk628f-dc {
++		compatible = "rockchip,dummy-codec";
++		#sound-dai-cells = <0>;
++	};
++
++	rkvtunnel: rkvtunnel {
++		compatible = "rockchip,video-tunnel";
++		status = "okay";
++	};
++
++	hdmiin-sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,format = "i2s";
++		simple-audio-card,name = "rockchip,hdmiin";
++		simple-audio-card,bitclock-master = <&dailink0_master>;
++		simple-audio-card,frame-master = <&dailink0_master>;
++		status = "okay";
++		simple-audio-card,cpu {
++			sound-dai = <&i2s3_2ch>;
++		};
++		dailink0_master: simple-audio-card,codec {
++			sound-dai = <&rk628f_dc>;
++		};
++	};
++
++	rk628: rk628 {
++        status="okay";
++        compatible = "regulator-fixed";
++        gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_HIGH>;
++        pinctrl-names = "default";
++        pinctrl-0 = <&rk628_pwr>;
++        regulator-name = "rk628pwr";
++        enable-active-high;
++        regulator-always-on;
++        regulator-boot-on;
++    };
++};
++
++&i2s3_2ch {
++	pinctrl-0 = <&i2s3m0_sclk &i2s3m0_lrck &i2s3m0_sdi>;
++	status = "okay";
++	rockchip,capture-only;
++};
++
++&i2c3 {
++	status = "okay";
++	clock-frequency = <400000>; /* 原厂 4.19 lz120 dtb 里 i2c3 跑 400k */
++
++	rk628_csi: rk628_csi@50 {
++		status = "okay";
++		reg = <0x50>;
++		compatible = "rockchip,rk628-csi-v4l2";
++		pinctrl-names = "default";
++		pinctrl-0 = <&rk628_hdmiin_pin &refclk_pins>;
++		/* 原厂 4.19 lz120 dtb 里这只中断脚是 &gpio0 RK_PB7；6.1 板级文件写的是 &gpio2 RK_PD7。
++		 * 先按 6.1 走，若 dv 时序不锁或无热插拔事件就换到 gpio0 RK_PB7 再试。
++		 */
++		interrupt-parent = <&gpio2>;
++		interrupts = <RK_PD7 IRQ_TYPE_LEVEL_HIGH>;
++		reset-gpios = <&gpio4 RK_PD2 GPIO_ACTIVE_LOW>;
++		/* neardi: plugin gpio must pull up, because hardware is not set pull up resistance */
++		plugin-det-gpios = <&gpio3 RK_PD0 GPIO_ACTIVE_LOW>;
++		continues-clk = <1>;
++		scaler-en = <1>;
++		assigned-clocks = <&pmucru CLK_WIFI>;
++		assigned-clock-rates = <24000000>;
++		clocks = <&pmucru CLK_WIFI>;
++		clock-names = "soc_24M";
++
++		rockchip,camera-module-index = <0>;
++		rockchip,camera-module-facing = "back";
++		rockchip,camera-module-name = "HDMI-MIPI";
++		rockchip,camera-module-lens-name = "RK628-CSI";
++
++		port {
++			hdmiin_out: endpoint {
++				remote-endpoint = <&hdmi_mipi_in>;
++				data-lanes = <1 2 3 4>;
++			};
++		};
++	};
++};
++
++&csi2_dphy_hw {
++	status = "okay";
++};
++
++&csi2_dphy0 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			hdmi_mipi_in: endpoint@1 {
++				reg = <1>;
++				remote-endpoint = <&hdmiin_out>;
++				data-lanes = <1 2 3 4>;
++			};
++		};
++
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			csidphy0_out: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&isp0_in>;
++			};
++		};
++	};
++};
++
++&rkisp {
++    status = "okay";
++};
++
++&rkisp_mmu {
++    status = "okay";
++};
++
++&rkisp_vir0 {
++    status = "okay";
++
++    port {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        isp0_in: endpoint@0 {
++            reg = <0>;
++            remote-endpoint = <&csidphy0_out>;
++        };
++    };
++};
++
++&pinctrl {
++	hdmiin {
++		rk628_hdmiin_pin: rk628-hdmiin-pin {
++			rockchip,pins = <2 RK_PD7 RK_FUNC_GPIO &pcfg_pull_none>,
++					<4 RK_PD2 RK_FUNC_GPIO &pcfg_pull_none>,
++					<3 RK_PD0 RK_FUNC_GPIO &pcfg_pull_up>;
++		};
++
++		rk628_pwr: rk628_pwr {
++			rockchip,pins = <0 RK_PD6 RK_FUNC_GPIO &pcfg_pull_none>;
++		};
++	};
++};
+--- a/arch/arm64/boot/dts/rockchip/rk3568-neardi-lz120-linux.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3568-neardi-lz120-linux.dts
+@@ -14,7 +14,7 @@
+  * so edp2vga must stay off or it fights the DSI path for vp1. Same pairing as Neardi
+  * uses in rk3568-neardi-lpb3568-linux.dts. */
+ //#include "rk3568-neardi-lpa3568-edp2vga.dtsi"
+-//#include "rk3568-neardi-lpa3568-hdmirx.dtsi"
++#include "rk3568-neardi-lpa3568-hdmirx.dtsi"
+ #include "rk3568-neardi-lpa3568-wifibt.dtsi"
+ //#include "rk3568-neardi-lpa3568-n4-double.dtsi" 	/* Cannot be used with mipi2lvds, because pwm5 and ahdbpwren is the same gpio */
+ //#include "rk3568-neardi-lpa3568-n4.dtsi"

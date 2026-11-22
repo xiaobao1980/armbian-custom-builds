@@ -12,6 +12,7 @@ on:
           - aio-3288c
           - h96s
           - am60-sa12
+          - neardi-lz120
           - neardi-lz200
           - cm3588-nas
           - rock-5-itx

@@ -30,6 +30,7 @@ on:
         default: neardi-lz200
         options:
           - neardi-lz200
+          - neardi-lz120
           - h96s
           - am60-sa12
           - aio-3288c

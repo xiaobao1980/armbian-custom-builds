@@ -52,7 +52,7 @@ jobs:
           IN_BOARDS: ${{ inputs.boards }}
         run: |
           set -euo pipefail
-          ALL_LIST="aio-3288c h96s am60-sa12 neardi-lz200 cm3588-nas rock-5-itx"
+          ALL_LIST="aio-3288c h96s am60-sa12 neardi-lz120 neardi-lz200 cm3588-nas rock-5-itx"
           # inputs.boards 是自由文本：既不能原样插进 run:（脚本注入），也不校验就
           # 喂给 matrix（下游拿它拼 boards/<x>/build.env 路径）。这里一次收口：
           # 拆逗号 → trim 空格（"h96s, neardi-lz200" 以前会产出带前导空格的非法名）

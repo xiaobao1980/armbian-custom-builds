@@ -37,6 +37,7 @@ on:
         options:
           - h96s
           - neardi-lz200
+          - neardi-lz120
           - am60-sa12
           - cm3588-nas
           - rock-5-itx
