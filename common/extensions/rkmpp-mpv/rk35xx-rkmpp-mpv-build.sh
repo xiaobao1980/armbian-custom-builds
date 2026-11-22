@@ -539,7 +539,14 @@ EOF
   echo 'KERNEL=="rga", MODE="0666"' >> /etc/udev/rules.d/99-mpp.rules
   udevadm control --reload-rules 2>/dev/null || true
   udevadm trigger 2>/dev/null || true
-  echo 1000 > /proc/mpp_service/load_interval 2>/dev/null || true
+  # mpp 采样间隔只在板端有意义：构建 chroot 里没有 /proc/mpp_service。
+  # 旧写法 `echo 1000 > /proc/... 2>/dev/null || true` 每次构建都会往日志漏一行
+  # 「No such file or directory」—— 重定向是 shell 自己做的，`>` 先失败（左到右，
+  # 2>/dev/null 还没生效），于是它成了事故排查时的假线索（run 44994198934 就被它带偏）。
+  # 判可写 + tee：不留裸重定向，也不留假线索，板端真跑时照样写得进去。
+  if [ -w /proc/mpp_service/load_interval ]; then
+    echo 1000 | tee /proc/mpp_service/load_interval >/dev/null 2>&1 || true
+  fi
   # CMA 512M（4K 流畅前提；重刷默认 256M 会卡）
   #
   # ⚠️ 语义与运行时脚本 set-cma.sh 保持一致：cma 一律【合并进已有的 extraboardargs 行】。
@@ -550,7 +557,10 @@ EOF
   #   （CMA 根本没生效），要么把原有参数吃掉，两种都静默出错。
   if [ -f /boot/armbianEnv.txt ]; then
     _cma_want="512M"
-    _cma_old="$(grep -E '^extraboardargs=' /boot/armbianEnv.txt 2>/dev/null | tail -1 | sed 's/^extraboardargs=//')"
+    # 末尾的 `|| true` 是必需的：armbianEnv.txt 里没有 extraboardargs 行（新板卡的常态）时
+    # grep 返回 1，pipefail 传给整条管道，裸赋值语句即失败，set -e 会【一个字节都不输出】
+    # 就终止脚本 —— 空值本就是下面 else 分支要的结果。run 44994198934 真实死于此。
+    _cma_old="$(grep -E '^extraboardargs=' /boot/armbianEnv.txt 2>/dev/null | tail -1 | sed 's/^extraboardargs=//' || true)"
     if printf '%s' "${_cma_old}" | grep -qE "cma=${_cma_want}"; then
       log "extraboardargs 已含 cma=${_cma_want}，无需改动"
     else

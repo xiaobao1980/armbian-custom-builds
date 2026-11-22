@@ -527,7 +527,14 @@ EOF
   echo 'KERNEL=="rga", MODE="0666"' >> /etc/udev/rules.d/99-mpp.rules
   udevadm control --reload-rules 2>/dev/null || true
   udevadm trigger 2>/dev/null || true
-  echo 1000 > /proc/mpp_service/load_interval 2>/dev/null || true
+  # mpp 采样间隔只在板端有意义：构建 chroot 里没有 /proc/mpp_service。
+  # 旧写法 `echo 1000 > /proc/... 2>/dev/null || true` 每次构建都会往日志漏一行
+  # 「No such file or directory」—— 重定向是 shell 自己做的，`>` 先失败（左到右，
+  # 2>/dev/null 还没生效），于是它成了事故排查时的假线索（run 44994198934 就被它带偏）。
+  # 判可写 + tee：不留裸重定向，也不留假线索，板端真跑时照样写得进去。
+  if [ -w /proc/mpp_service/load_interval ]; then
+    echo 1000 | tee /proc/mpp_service/load_interval >/dev/null 2>&1 || true
+  fi
   # CMA 512M（4K 流畅前提；重刷默认 256M 会卡）
   if [ -f /boot/armbianEnv.txt ]; then
     if grep -q 'cma=' /boot/armbianEnv.txt; then

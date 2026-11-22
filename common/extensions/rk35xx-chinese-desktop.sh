@@ -214,8 +214,10 @@ _rk_cn_filter_dtb() {
 	fi
 	# 2c) 多个命中 → 用芯片前缀（rk35xx 本平台）再收一轮
 	if [[ ${#_dtb_hit[@]} -gt 1 ]]; then
-		local _chip
-		_chip="$(printf '%s' "${LINUXFAMILY:-}" | grep -oE 'rk35[0-9]{2}' | head -1)"
+		# 用 bash 正则而不是 printf|grep：grep 无匹配返回 1，pipefail 会把它传给整条管道，
+		# 裸赋值即失败；rk35xx 这个 LINUXFAMILY 值本就凑不出「rk35+两位数字」，命中不了。
+		local _chip=''
+		if [[ "${LINUXFAMILY:-}" =~ rk35[0-9]{2} ]]; then _chip="${BASH_REMATCH[0]}"; fi
 		if [[ -n "${_chip}" ]]; then
 			local -a _narrow=()
 			for _d in "${_dtb_hit[@]}"; do
@@ -232,9 +234,10 @@ _rk_cn_filter_dtb() {
 	fi
 	board_dtb="${_dtb_hit[0]}"
 
-	# 3) 芯片前缀（决定保留哪些 dtbo）
-	chip_prefix="$(printf '%s' "${LINUXFAMILY:-}" | grep -oE 'rk35[0-9]{2}' | head -1)"
-	[[ -n "${chip_prefix}" ]] || chip_prefix="$(printf '%s' "${board_name}" | grep -oE 'rk35[0-9]{2}' | head -1)"
+	# 3) 芯片前缀（决定保留哪些 dtbo）：同 2c 用 bash 正则，别用 printf|grep 管道
+	chip_prefix=''
+	if [[ "${LINUXFAMILY:-}" =~ rk35[0-9]{2} ]]; then chip_prefix="${BASH_REMATCH[0]}"; fi
+	if [[ -z "${chip_prefix}" && "${board_name}" =~ rk35[0-9]{2} ]]; then chip_prefix="${BASH_REMATCH[0]}"; fi
 	[[ -n "${chip_prefix}" ]] || chip_prefix="$(printf '%s' "${board_dtb}" | sed -E 's/^([a-z0-9]+)-.*/\1/')"
 	case "${chip_prefix}" in *.dtb*) chip_prefix="" ;; esac
 
