@@ -73,7 +73,7 @@ on:
         default: ""
 
       release:
-        description: "发行版"
+        description: "发行版 (default=跟随板卡 build.env; forky=Debian 14 属 CSC、未经本仓硬解栈实测; jammy 上游选择器已不再列出，本仓保留只为两个定制版能吃到 chromium-rkmpp 的 PPA)"
         type: choice
         required: false
         default: default
@@ -84,6 +84,7 @@ on:
           - trixie
           - jammy
           - resolute
+          - forky
 
       compress:
         description: "镜像压缩格式"

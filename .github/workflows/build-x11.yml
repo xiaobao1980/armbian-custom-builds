@@ -33,7 +33,7 @@ on:
           - rock-5-itx
 
       release:
-        description: "发行版 (default=跟随板卡; X11 硬解栈首选 trixie, 预编译 deb 只匹配 trixie)"
+        description: "发行版 (default=跟随板卡; X11 硬解栈首选 trixie, 预编译 deb 只匹配 trixie; resolute/forky 无预编译包→rkmpp-mpv 走源码编译; jammy 上游选择器已不列，保留只为 PPA 网页硬解)"
         type: choice
         required: false
         default: default
@@ -43,6 +43,8 @@ on:
           - noble
           - bookworm
           - jammy
+          - resolute
+          - forky
 
       desktop_environment:
         description: "X11 桌面环境 (Wayland 桌面请用 Wayland 定制版)"
@@ -582,12 +584,19 @@ jobs:
               ;;
             jammy)
               echo "::warning::jammy: 网页硬解可用(chromium 126+rkmpp)，但 libplacebo 4.x 编不出 mpv 0.41 -> 本镜像无 mpv 硬解；两者都要请改 release=noble"
+              echo "::warning::jammy 已不在上游 armbian/build 的 RELEASE 选择器里，本仓保留这一个选项只为吃到 chromium-rkmpp 的 PPA（jammy=126）；上游哪天彻底不收，这个选项就会构建失败。"
               ;;
             trixie)
               echo "::warning::trixie: 只有 mpv 硬解；Debian 侧 chromium 无 V4L2 VDA patch（硬解死路），网页视频仍是软解"
               ;;
             bookworm | bullseye)
               echo "::warning::${REL} 自带 libplacebo < 6.338.2（mpv 0.41 硬依赖），自编译 mpv 会中止构建。请改 trixie|noble。"
+              ;;
+            resolute)
+              echo "::warning::resolute: 在 rk35xx-rkmpp-mpv-build.sh 的 SUPPORTED_DISTROS 里（mpv 硬解可自编译），但 PPA 的 chromium+rkmpp 只发 jammy|noble -> 网页视频仍是软解；且没出过 resolute 预编译包，走源码编译。"
+              ;;
+            forky)
+              echo "::warning::forky: Debian 14 在上游属 CSC，且不在 rk35xx-rkmpp-mpv-build.sh 的 SUPPORTED_DISTROS 里（脚本只告警、按通用 Debian 路径继续编 mpp+rga+ffmpeg+mpv，未经该发行版实测）；PPA 无 forky -> 无网页硬解，也没有预编译包（源码编译，6h 预算紧）。"
               ;;
           esac
           if [ "${REL}" != "trixie" ] && [ "${REL}" != "jammy" ]; then

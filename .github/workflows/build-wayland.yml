@@ -6,8 +6,8 @@ name: Build Armbian Image (Wayland 定制版)
 #  固定策略（评测点，不可覆盖）：
 #    · 桌面必须是支持 Wayland 的会话：gnome / kde-plasma / budgie
 #    · 网页硬解走 chromium-rkmpp（rockchip-multimedia PPA + pin1002 + chromium 132/126+rkmpp）。
-#      ⚠️ 该 PPA 只发布 jammy / noble —— trixie/bookworm 上该扩展会自动跳过、
-#      镜像里没有网页硬解；默认放行（allow_no_hwdec=true）以便出纯桌面/中文镜像。
+#      ⚠️ 该 PPA 只发布 jammy / noble —— 其余发行版（trixie/bookworm/resolute/forky）
+#      该扩展会自动跳过、镜像里没有网页硬解；默认放行（allow_no_hwdec=true）以便出纯桌面/中文镜像。
 #    · mesa 运行时 / panthor-gpu overlay / PPA 基础多媒体包由 armbian 主线的
 #      armbian-configng module_desktops 在 rootfs 装配期完成（上游 2026-05-09 已把
 #      旧 extensions/mesa-vpu.sh 的这部分职责迁过去并删除该扩展）；本仓只补它没做的
@@ -38,7 +38,7 @@ on:
           - rock-5-itx
 
       release:
-        description: "发行版 (Wayland 硬解栈 PPA 只支持 jammy/noble; default=跟随板卡)"
+        description: "发行版 (Wayland 硬解栈 PPA 只支持 jammy/noble; default=跟随板卡; resolute/forky 无网页硬解; jammy 上游选择器已不列，保留只为 PPA)"
         type: choice
         required: false
         default: default
@@ -48,6 +48,8 @@ on:
           - jammy
           - trixie
           - bookworm
+          - resolute
+          - forky
 
       desktop_environment:
         description: "Wayland 桌面环境"
@@ -591,8 +593,14 @@ jobs:
               ;;
             jammy)
               echo "硬解栈: chromium-rkmpp（chromium 126+rkmpp；jammy 无 panthor overlay，GPU 走发行版 mesa）"
+              echo "::warning::jammy 已不在上游 armbian/build 的 RELEASE 选择器里，本仓保留这一个选项只为吃到 chromium-rkmpp 的 PPA（jammy=126）；上游哪天彻底不收，这个选项就会构建失败。"
               ;;
             *)
+              # 这两档除了「无网页硬解」，mpv 侧也各有一个坑，提前喊出来（扩展构建期会自证）
+              case "${REL}" in
+                resolute) echo "::warning::resolute: mpv 侧在 rk35xx-rkmpp-mpv-build.sh 的 SUPPORTED_DISTROS 里可自编译，但没出过 resolute 预编译包 -> chroot 源码编译，6h 预算紧。" ;;
+                forky) echo "::warning::forky: Debian 14 在上游属 CSC；且不在 rk35xx-rkmpp-mpv-build.sh 的 SUPPORTED_DISTROS 里（脚本只告警、按通用 Debian 路径继续编 mpp+rga+ffmpeg+mpv，未经该发行版实测），同样没有预编译包 -> 源码编译，6h 预算紧。" ;;
+              esac
               if [ "${IN_ALLOW_NO_HWDEC}" = "true" ]; then
                 echo "::warning::${REL} 上 chromium-rkmpp 会自动跳过（PPA 只发布 jammy/noble）—— 本镜像**不含网页硬解**，但桌面/中文环境/输入法完整可用。"
               else

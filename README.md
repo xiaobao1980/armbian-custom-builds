@@ -57,20 +57,20 @@ scripts/
 Actions 页面四个入口：
 
 1. **Build Armbian Image (单板)** — 下拉式参数（参照 ophub/amlogic-s9xxx-armbian 的交互），跑完在 Artifacts 下载 `*.img.xz`（保留 90 天）。
-2. **Build All Boards (矩阵)** — 4 块板并行矩阵构建，可用 `boards` 输入筛选（如 `h96s,am60-sa12`）。该输入是自由文本，因此 matrix job 会拆逗号、去空格后**比对板卡白名单**：出现未知板卡名直接失败，不会带着它去拼 `boards/<x>/build.env` 路径。
+2. **Build All Boards (矩阵)** — 全部已登记板卡并行矩阵构建（名单是 `build-all.yml` 里的 `ALL_LIST`，与 `boards/` 目录一一对应），可用 `boards` 输入筛选（如 `h96s,am60-sa12`）。该输入是自由文本，因此 matrix job 会拆逗号、去空格后**比对板卡白名单**：出现未知板卡名直接失败，不会带着它去拼 `boards/<x>/build.env` 路径。
 3. **Build Armbian Image (X11 定制版)** / 4. **(Wayland 定制版)** — 固定策略的开箱即用路线，详见下一节「定制版工作流」。
 
 单板手动触发的参数一览（全部为下拉，选 `default` 即回落该板 `build.env`）：
 
 | 输入 | 取值 | 映射到 armbian |
 |---|---|---|
-| `board` | 4 块板 | `BOARD` |
+| `board` | 见上文板卡清单 | `BOARD` |
 | `edition` | `default` / `desktop` / `server` / `minimal` | `BUILD_DESKTOP` + `BUILD_MINIMAL` |
 | `desktop_environment` | `default` / `gnome` / `xfce` / `kde-plasma` / `cinnamon` / `mate` / `lxqt` / `i3-wm` / `budgie` | `DESKTOP_ENVIRONMENT` |
 | `desktop_tier` | `default` / `minimal` / `mid` / `full` | `DESKTOP_TIER` |
 | `kernel_branch` | `default` / `vendor` / `current` / `edge` / `legacy` | `BRANCH` |
 | `kernel_version` | 如 `6.1.172`（留空=跟随分支最新） | `KERNELBRANCH=tag:v<x.y.z>` |
-| `release` | `default` / `noble` / `bookworm` / `trixie` / `jammy` / `resolute` | `RELEASE` |
+| `release` | `default` / `noble` / `bookworm` / `trixie` / `jammy` / `resolute` / `forky` | `RELEASE` |
 | `compress` | `xz` / `7z` / `none` | `COMPRESS_OUTPUTIMAGE` |
 | `build_ref` | 默认 `main` | armbian/build 的 git 引用 |
 
@@ -160,7 +160,7 @@ Actions 页面四个入口：
 > 扩展读包内 `/usr/local/share/rkmpp-stack/build-info` 的 `DISTRO_CODENAME` 与本次 `RELEASE` 比对，
 > 发行版或架构不匹配就把包丢弃、回退 chroot 源码编译，6h 超时风险原封不动回来）。
 > 现有 tag 只有两条有效链：`noble → rkmpp-stack-v0.41.0-noble-arm64`、
-> `trixie → rkmpp-stack-v0.41.0-2`（`-1` 从未发布，列出仅为兼容）；`bookworm` / `jammy` / `resolute`
+> `trixie → rkmpp-stack-v0.41.0-2`（`-1` 从未发布，列出仅为兼容）；`bookworm` / `jammy` / `resolute` / `forky`
 > 没有预编译包 → 脚本直接 notice 返回 0，扩展走源码编译。脚本**任何失败都只告警、不返回非零**，
 > 构建不会在下载环节中断。
 
@@ -184,6 +184,10 @@ Actions 页面四个入口：
 | `trixie` | ✅ rkmpp-mpv | ❌ Debian 侧 chromium 无 V4L2 VDA patch（死路） |
 | `jammy` | ❌ libplacebo 4.x | ✅ chromium 126+rkmpp |
 | `bookworm` | ❌ libplacebo 5.229 | ❌ |
+| `resolute` | ⚠️ 在 `SUPPORTED_DISTROS` 里（meson 用系统版），但**没出过预编译包** → chroot 源码编译（6h 预算紧）；libplacebo 够不够 6.338.2 由 `rkmpp-mpv.sh` 构建期实测，不足则跳过并告警 | ❌ PPA 只发 jammy/noble，`chromium-rkmpp` 自动跳过 |
+| `forky` | ⚠️ Debian 14（上游 CSC）；**不在** `SUPPORTED_DISTROS` 里 —— 构建脚本只告警并按通用 Debian 路径继续编 mpp+rga+ffmpeg+mpv，未经该发行版实测；同样没有预编译包 | ❌ PPA 无 forky |
+
+> ⚠️ **jammy 的现状**：上游 armbian/build 的 RELEASE 选择器已经不再列 jammy（`main-config.sh` 里也只认 `noble|resolute` 为 Ubuntu），本仓三个 workflow 仍保留这一项，唯一理由是 `chromium-rkmpp` 的 PPA 还发 jammy=126 的 `+rkmpp` chromium。哪天上游彻底不收，这个选项就会在 rootfs 阶段失败，届时摘掉即可。
 
 可覆盖变量：
 
