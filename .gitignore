@@ -4,3 +4,9 @@
 output/
 .cache/
 userpatches.real/
+
+# 二进制产物一律不入库：tools/ 下只跟踪脚本、补丁和说明，debs/ 是 build-chromium-rkmpp.sh
+# 现打的产物（本仓实测 140 MB：82+51+7 MB 三个 deb）。真进了 history 就洗不掉，
+# 发布走 workflow 里的 artifact/Release，不走 git。
+*.deb
+tools/**/debs/
