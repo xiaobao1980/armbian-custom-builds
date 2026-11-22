@@ -96,15 +96,32 @@ log() {
 }
 
 # 关键字 → 友好名。顺序有意义：hdmiin 必须先于 hdmi0/hdmi1/hdmi 命中。
+# 关键字表按**本仓库各板 DTS 里 status="okay" 的 sound 节点名**逐个对出来，不是猜的：
+#   h96s        hdmi-sound / ht5010-sound(card name 就叫 "3.5mm Audio") / spdif-tx0-sound
+#   neardi-lz120 hdmi-sound / rk809-sound(RK809 PMIC 内置 codec，带 hp-det-gpio)
+#   rock-5-itx  es8316-sound / hdmi1-sound / dp0-sound / dp1-sound / hdmiin-sound
+#   am60-sa12   hdmi0/hdmi1/dp0/hdmiin + it6621-sound(cpu=spdif_tx0，HDMI 桥)
+#               + ms4344-dac-sound(3.5mm 占位，DTS 注明 dummy 不出声) + es7243-adc-linein(纯采集)
+#               （板级 DTS 里没有 rt5616 节点；只有 overlay 里那套 rt5616 脚本按 cm3588-nas 抄过来的，
+#                 真机上 rt5616 到底注册不注册，待 aplay -l 确认）
+#   cm3588-nas  hdmiin / rt5616 / hdmi0 / dp0 / hdmi1
+#   neardi-lz200 es8388-sound / hdmi-sound / dp0-sound（dp2/edp 都是 disabled，不注册）
 friendly_name() {
 	case "$1" in
 		*hdmiin*|*hdmirx*|*hdmi-rx*|*hdmi_rx*)          echo "HDMI-IN 音频输入" ;;
 		*hdmi0*)                                        echo "HDMI-0 音频输出" ;;
 		*hdmi1*)                                        echo "HDMI-1 音频输出" ;;
+		*it6621*)                                       echo "HDMI(IT6621 桥) 音频输出" ;;
 		*hdmi*)                                         echo "HDMI 音频输出" ;;
-		*dp0*|*dp1*|*usbdp*)                            echo "DP(USB-C) 音频输出" ;;
+		*dp0*|*dp1*|*dp2*|*usbdp*)                      echo "DP(USB-C) 音频输出" ;;
+		*edp*)                                          echo "eDP 音频输出" ;;
 		*spdif*)                                        echo "S/PDIF 音频输出" ;;
-		*rt5616*|*es8388*|*es8328*|*codec*|*headphone*) echo "耳机输出/麦克风输入" ;;
+		*es7243*|*linein*|*line-in*|*pdm-mic*)          echo "线路/麦克风输入（采集）" ;;
+		*ms4344*)                                       echo "3.5mm 耳机输出（占位无声）" ;;
+		*ht5010*)                                       echo "3.5mm 耳机输出" ;;
+		*rt5616*|*es8388*|*es8328*|*es8316*|*es8323*)   echo "耳机输出/麦克风输入" ;;
+		*rk809*|*rk817*|*rk816*)                        echo "耳机输出/麦克风输入（PMIC codec）" ;;
+		*codec*|*headphone*)                            echo "耳机输出/麦克风输入" ;;
 		*)                                              echo "" ;;
 	esac
 }
@@ -251,7 +268,7 @@ AUDIONAMESUNIT
 # 原理：写 /etc/asound.conf 把 alsa "default" 指向目标卡，所有 ALSA 应用跟随。
 #       卡号按 ID_PATH 关键字现场探测（不写死 0/1/2，换板/换内核卡号会变）。
 # 用法：
-#   sudo audio-switch 3.5|hdmi|hdmi1|dp|spdif   切换默认出口
+#   sudo audio-switch 3.5|hdmi|hdmi1|it6621|dp|spdif   切换默认出口
 #   audio-switch list                           看候选声卡与播放能力
 #   audio-switch status                         看当前默认出口
 #   sudo audio-switch test                      播 3 秒 1kHz 测试音
@@ -282,13 +299,20 @@ has_playback() { ls -d "/proc/asound/card$1/pcm"*p >/dev/null 2>&1; }
 
 label_of() {
 	case "$1" in
-		*hdmiin*|*hdmirx*) echo "HDMI-IN 采集" ;;
+		*hdmiin*|*hdmirx*|*hdmi-rx*|*hdmi_rx*) echo "HDMI-IN 采集" ;;
 		*hdmi0*) echo "HDMI-0" ;;
 		*hdmi1*) echo "HDMI-1" ;;
+		*it6621*) echo "HDMI(IT6621 桥)" ;;
 		*hdmi*) echo "HDMI" ;;
-		*dp0*|*dp1*|*usbdp*) echo "DP(USB-C)" ;;
+		*dp0*|*dp1*|*dp2*|*usbdp*) echo "DP(USB-C)" ;;
+		*edp*) echo "eDP" ;;
 		*spdif*) echo "S/PDIF" ;;
-		*rt5616*|*es8388*|*es8328*|*codec*|*headphone*) echo "3.5mm 耳机/麦克风" ;;
+		*es7243*|*linein*|*line-in*|*pdm-mic*) echo "线路/麦克风输入" ;;
+		*ms4344*) echo "3.5mm(占位无声)" ;;
+		*ht5010*) echo "3.5mm 耳机" ;;
+		*rt5616*|*es8388*|*es8328*|*es8316*|*es8323*) echo "3.5mm 耳机/麦克风" ;;
+		*rk809*|*rk817*|*rk816*) echo "3.5mm(PMIC codec)" ;;
+		*codec*|*headphone*) echo "3.5mm 耳机/麦克风" ;;
 		*) echo "其它" ;;
 	esac
 }
@@ -350,10 +374,20 @@ show_list() {
 }
 
 case "${1-}" in
-	3.5|35|3.5mm|headphone) do_switch 'rt5616|es8388|es8328|codec|headphone' "3.5" ;;
-	hdmi|hdmi0)             do_switch 'hdmi0' "hdmi" ;;
+	# 3.5 目标**故意不含 ms4344**：am60-sa12 的 ms4344-dac-sound 用 dummy codec 占位，
+	# 声卡会注册、播放 PCM 也在（has_playback 拦不住），但 DTS 注释明写「不会真出声」。
+	# 让它进 3.5 目标 = 切过去一片安静还以为切成功了。list 里仍会显示它的真实状态。
+	3.5|35|3.5mm|headphone) do_switch 'rt5616|es8388|es8328|es8316|es8323|rk809|rk817|rk816|ht5010|codec|headphone' "3.5" ;;
+	# hdmi 目标匹配精确节点名而不是裸 'hdmi'：h96s / lz200 / lz120 的节点就叫 hdmi-sound
+	# （单路 HDMI，无编号），cm3588-nas / am60 叫 hdmi0-sound。裸 'hdmi' 会同时吃掉
+	# hdmiin-sound（纯采集）和 hdmi-rx，POSIX ERE 又没有负向断言可排除 → 列举真实名字最稳。
+	hdmi|hdmi0)             do_switch 'hdmi0|hdmi-sound|hdmi_sound' "hdmi" ;;
 	hdmi1)                  do_switch 'hdmi1' "hdmi1" ;;
-	dp|dp0|usb-c)           do_switch 'dp0|dp1|usbdp' "dp" ;;
+	# it6621 单列一个目标、不并进 hdmi：am60-sa12 上 it6621-sound(SPDIF→IT6621 桥) 与
+	# hdmi0-sound/hdmi1-sound 同时 status="okay"，而 find_card 取**卡号最小**的命中，
+	# 并进去会让 `hdmi` 到底切到哪一路取决于探测顺序。桥接那路要用时显式指名。
+	it6621|bridge)          do_switch 'it6621' "it6621" ;;
+	dp|dp0|usb-c)           do_switch 'dp0|dp1|dp2|usbdp' "dp" ;;
 	spdif|spdif-out)        do_switch 'spdif' "spdif" ;;
 	list) show_list ;;
 	status)
@@ -382,6 +416,7 @@ case "${1-}" in
 		echo "  sudo audio-switch 3.5     # 3.5mm 耳机（codec 卡）"
 		echo "  sudo audio-switch hdmi    # HDMI-0"
 		echo "  sudo audio-switch hdmi1   # HDMI-1"
+		echo "  sudo audio-switch it6621  # HDMI（IT6621 桥，am60-sa12）"
 		echo "  sudo audio-switch dp      # DP / USB-C"
 		echo "  sudo audio-switch spdif   # S/PDIF"
 		echo "  audio-switch list         # 候选声卡与播放能力"
