@@ -10,9 +10,11 @@
 #      未跟踪文件），所以没有 upstream commit 可比、也没有可复制的 diff 命令；
 #      厂商/上游后续改动只能手工回合。
 #   本地追加（都在文件末尾，逐条登记）：
-#     1) ENABLE_EXTENSIONS=verify-boot-env,lz120-kernel-config
-#        —— 前者出厂前校验 armbianEnv.txt 的 rootdev/fdtfile（common/extensions/），
-#           后者把 LT8912 / panel-simple 两个内核符号置 y（本板 userpatches/extensions/）
+#     1) ENABLE_EXTENSIONS=verify-boot-env,lz120-kernel-config,audio-friendly-names
+#        —— verify-boot-env 出厂前校验 armbianEnv.txt 的 rootdev/fdtfile（common/extensions/），
+#           lz120-kernel-config 把 LT8912 / panel-simple 两个内核符号置 y（本板 userpatches/extensions/），
+#           audio-friendly-names 在无头镜像下只装 audio-switch 手工切 ALSA 出口（音频未实测，
+#           该分支不装 boot 服务、不预设默认出口 → 对开机零影响）
 #     2) PACKAGE_LIST_ADDITIONAL 追加 i2c-tools / libdrm-tests
 #        —— LT8912 HDMI 通路 bring-up 用（i2cdetect 探 0x48/0x49、modetest 点屏）
 #
@@ -36,7 +38,7 @@ IMAGE_PARTITION_TABLE="gpt"
 # ── 本地追加 1：扩展 ────────────────────────────────────────────────────────
 # ⚠️ userpatches/extensions/*.sh 不会被自动加载，必须在这里（或 build.env）列名。
 #    build.env 的 ENABLE_EXTENSIONS 会**覆盖**本行，两处必须保持一致。
-ENABLE_EXTENSIONS="verify-boot-env,lz120-kernel-config"
+ENABLE_EXTENSIONS="verify-boot-env,lz120-kernel-config,audio-friendly-names"
 
 # ── 本地追加 2：bring-up 工具包 ─────────────────────────────────────────────
 # Bring-up tooling for the LT8912 HDMI_TX1 path: modetest, i2c probing, weston for the second display
