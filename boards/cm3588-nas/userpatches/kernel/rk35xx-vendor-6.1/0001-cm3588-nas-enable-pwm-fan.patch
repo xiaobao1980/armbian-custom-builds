@@ -1,0 +1,85 @@
+From: xiaobao <xiaobao@local>
+Date: Sat, 22 Nov 2026 14:00:00 +0800
+Subject: [PATCH] arm64: dts: rockchip: enable the CM3588 NAS PWM fan and retune its trips
+
+The vendor rk3588-friendlyelec-cm3588-nas.dts ships the pwm-fan node with
+status = "disabled", so on an Armbian vendor (rk-6.1-rkr7.2) image the fan
+connector is dead: no /sys/class/hwmon pwm device, no cooling device, the 4
+NVMe drives and the SoC have no forced airflow at all.
+
+Enable it. &pwm1 is already status = "okay" (pwm1m1_pins) and fan-supply
+resolves to vcc5v0_sys, which is regulator-always-on + regulator-boot-on in
+rk3588s-nanopi-r6-common.dtsi, so the fan regulator is up before the driver
+probes and there is no deferred-probe loop.
+
+Retune rockchip,temp-trips from 50/55/60/65/70 to 45/50/55/60/65 degC.
+On this kernel the trips are evaluated in-kernel: drivers/hwmon/pwm-fan.c
+registers a rockchip_system_monitor notifier (CONFIG_ROCKCHIP_SYSTEM_MONITOR=y
+in rockchip_linux_defconfig, and rk3588s.dtsi defines rockchip_system_monitor
+with rockchip,thermal-zone = "soc-thermal"), so the table below is the whole
+policy -- no userspace daemon needed.
+
+The 45..65 window matches both community CM3588 fan controllers
+(github.com/martabal/cm3588-fan: MIN_THRESHOLD=45, MAX_THRESHOLD=65, i.e.
+state 1 at 45 up to state 5 above 65; github.com/vijaygill/pwm-fan-cm3588:
+same 6-state ramp). The vendor 50..70 table was tuned for FriendlyElec's own
+open chassis; in a closed NAS case with drives the package sits hotter and
+the drives are the part that actually cooks.
+
+cooling-levels are left exactly as the vendor set them (0 35 64 100 150 255,
+i.e. duty = level/255: 0/13.7/25/39/59/100 percent). If the installed fan
+stalls at state 1 the fix is to raise cooling-levels[1], NOT to move the
+trips; check with:
+    cat /sys/class/hwmon/hwmon*/name        # -> pwmfan
+    echo 1 > .../pwm1; cat .../fan1_input  # or listen
+
+Note: rockchip,hold-time-ms is not read by rk-6.1's pwm-fan driver (the
+5.10-era vendor patch consumed it; drivers/hwmon/pwm-fan.c has no reference
+to it). It is kept for parity with the vendor file. The effective debounce is
+inside rockchip_system_monitor_thermal_update(): a falling edge is only
+re-broadcast once the temperature dropped by more than 2000 millicelsius,
+rising edges are broadcast every poll (rockchip,polling-delay defaults to
+200 ms).
+
+Also note: while rockchip,temp-trips is present and the system-monitor
+notifier registers, the driver returns before
+devm_thermal_of_cooling_device_register(), so there is deliberately NO
+/sys/class/thermal/cooling_deviceN for the fan. That means the two
+aforementioned daemons have nothing to write to. To use one of them instead
+of the in-kernel table, delete the rockchip,temp-trips property; the driver
+then falls through and registers the 6-state cooling device.
+
+---
+ .../dts/rockchip/rk3588-friendlyelec-cm3588-nas.dts  | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dts b/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dts
+index d2022f5..6dc5982 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dts
+@@ -76,7 +76,7 @@
+ 	};
+ 
+ 	fan: pwm-fan {
+-		status = "disabled";
++		status = "okay";
+ 		compatible = "pwm-fan";
+ 		#cooling-cells = <2>;
+ 		fan-supply = <&vcc5v0_sys>;
+@@ -84,11 +84,11 @@
+ 		cooling-levels = <0 35 64 100 150 255>;
+ 		rockchip,hold-time-ms = <2000>;
+ 		rockchip,temp-trips = <
+-			50000	1
+-			55000	2
+-			60000	3
+-			65000	4
+-			70000	5
++			45000	1
++			50000	2
++			55000	3
++			60000	4
++			65000	5
+ 		>;
+ 	};
+ 

@@ -13,6 +13,8 @@ on:
           - h96s
           - am60-sa12
           - neardi-lz200
+          - cm3588-nas
+          - rock-5-itx
 
       edition:
         description: "镜像类型 (server=纯命令行 / minimal=精简命令行 / desktop=带桌面)"

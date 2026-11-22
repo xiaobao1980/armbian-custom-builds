@@ -34,6 +34,8 @@ on:
           - h96s
           - neardi-lz200
           - am60-sa12
+          - cm3588-nas
+          - rock-5-itx
 
       release:
         description: "发行版 (Wayland 硬解栈 PPA 只支持 jammy/noble; default=跟随板卡)"

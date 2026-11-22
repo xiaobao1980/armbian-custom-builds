@@ -12,6 +12,8 @@
 | `h96s` | RK3576 | rk35xx | vendor / noble | 目录名 `h96s`，实际 `BOARD=h96-m9`。2026-08-29 golden 基线：9999 DTS 补丁、SAI TDM lanes 修复、`h96-m9-configure`（音频/蓝牙/VPU）经 .csc hook 部署 |
 | `am60-sa12` | RK3588 | rockchip-rk3588 | vendor / bookworm | rk3588-am60-sa12 DTS（kernel+u-boot）、tcpci_et7303.ko、触控/HDMI/RT5616 全套 overlay |
 | `neardi-lz200` | RK3576 | rk35xx | vendor / trixie | 自定义 defconfig/DTS 补丁 + `linux-neardi-lz200-rk3576.config`。RELEASE **必须** trixie（预编译 deb 钉死 trixie SONAME，如 `libplacebo349`；bookworm 的 libplacebo 5.229 编不出 mpv 0.41） |
+| `cm3588-nas` | RK3588 | rockchip-rk3588（vendor 时 `LINUXFAMILY=rk35xx`） | vendor / trixie | FriendlyElec CM3588 NAS，**无头服务端**。描述文件是上游副本（`main @ 19f1b229c686`，见文件头 provenance），本地只追加板级 hook：vendor 串口 `serialcon=ttyFIQ0`、journald 持久化、RTL8125B 网卡自检、风扇落地自检；另带一个 vendor 内核补丁 `userpatches/kernel/rk35xx-vendor-6.1/0001-cm3588-nas-enable-pwm-fan.patch`（FriendlyElec 的 DTS 把 `pwm-fan` 写成 `status = "disabled"`，裸镜像风扇口是死的：打开它，并把 `rockchip,temp-trips` 由 50..70 改 45..65 ℃，对齐社区方案；注意有 `temp-trips` 时档位走内核查表、**不生成** `cooling_device`，要跑社区守护进程就得删掉 `temp-trips`，二选一）。两个 2.5G 口 = **RTL8125B**（PCIe，非 RK3588 自带 GMAC），上游 udev 规则按 PCI 地址命名 `eth0`，`r8125`/`r8169` 通吃。rkmpp 栈在这块板是**硬件转码**用途（ffmpeg `*_rkmpp`），不是桌面播放 |
+| `rock-5-itx` | RK3588 | rockchip-rk3588（vendor 时 `LINUXFAMILY=rk35xx`） | vendor / trixie | Radxa Rock 5 ITX，xfce + X11 硬解桌面（`build.env` 档位 `mid`；Build-All 批量版仍强制 `minimal`，见「维护约定」）。同样是上游副本 + 同款串口 hook + RTL8852BE 无线自检。无线 = **Radxa A8 模组 / RTL8852BE**：Wi-Fi 走 PCIe（`rtw88_8852be`）、蓝牙走 USB（`rtl_bt` 固件）→ 本板**没有 BT_UART**，不适用 am60/h96s 的 UART 蓝牙路子；`dtb-no-mac` / `ntp-boot-sync` / `bluetooth-autoconnect` 全开 |
 
 每个板卡目录结构（U24 构建机同构）：
 
@@ -304,9 +306,12 @@ sudo ./compile.sh \
 - **`BUILD_DESKTOP=yes` 必须同时给 `DESKTOP_ENVIRONMENT` 和 `DESKTOP_TIER`**：新框架会在缺省时弹 `Choose a desktop environment` / `Choose desktop tier` 对话框，CI 无 TTY 直接以 `stdin is not a terminal. can't use dialog` 退 43。档位 `minimal`（仅 DE，~500MB）/ `mid`（+浏览器、文件管理器、媒体，~1GB）/ `full`（+办公、创作、开发，~2.5GB）。
   ⚠️ 合法值只有 `minimal|mid|full`，**没有 `base`** —— 矩阵 workflow 历史上写 `base`，三个桌面向板卡全部注定失败/弹框，现已统一为 `minimal`（6h 预算下省装包时间）。
 - 桌面可用性受**架构**限制：`gnome` / `kde-plasma` / `kde-neon` / `deepin` 只支持 `arm64`/`amd64`；**armhf 板（如 RK3288 的 aio-3288c）只能选 `xfce` / `cinnamon` / `mate` / `i3-wm` / `enlightenment`**。
-- 新板卡 = `boards/<name>/` 建目录（config/boards + userpatches + build.env），并在两个 workflow 的 options/matrix 中登记。
+- 新板卡 = `boards/<name>/` 建目录（至少 `config/boards/<name>.{csc,conf}` + `build.env`，需要补丁/overlay 再加 `patch/` `userpatches/`；`sync-board-to-build.sh` 对缺失子目录静默跳过），并在**四个** workflow 里登记：`build-image` / `build-x11` / `build-wayland` 的 `board` choice options + `build-all.yml` 的 `ALL_LIST` 白名单（漏后者会被 `::error::未知板卡` 拒进 matrix）。`build.env` 里的 `BOARD=` 必须等于板卡目录名与描述文件名。
+- **直接沿用上游板卡**（不为 DTS/U-Boot 造本地分叉）时：正文**逐字节照抄**上游，加 15 行 provenance 头（来源 commit + 原路径 + 「导入即分叉」告警 + 可复制的 `diff -u <(curl …)` 上游比对命令 + 本地改动清单），板级定制只**追加**在文件末尾的 `post_family_tweaks__*` 里并逐条登记进清单。从此以后上游对同板的改动不会自动生效，靠那个 diff 命令手动回合。
 - 补丁一律放 `userpatches/kernel/<family-branch>/`（新式）或该板 `patch/kernel/archive/<dir>/`（旧式 in-tree，仅 AIO 使用）。
 - 板级开机定制写在各自 .csc 的 `post_family_tweaks__*` hook 中（host 上下文、只对本板生效）；**不要**往 `customize-image.sh` 塞板级逻辑 —— 官方对所有板无条件 source 它，会互相污染（除非自行加 `$BOARD` 守卫）。
+- **vendor 内核（rk35xx）的调试串口是 `ttyFIQ0`，但镜像默认拿不到它**：`config/bootscripts/boot-rk35xx.cmd` 在 `env import armbianEnv.txt` **之前** 就 `setenv serialcon "ttyS2"`，而 `config/bootenv/rk35xx.txt` 模板里根本没有 `serialcon` 键 —— 上游 family 的 `SERIALCON` 只在 getty 那侧生效，进不了 bootargs。于是 vendor 镜像的 cmdline 永远挂着这块板上不存在的 `console=ttyS2,1500000`。修法：板级 hook 往 `/boot/armbianEnv.txt` **补 `serialcon=ttyFIQ0` 键**（先判存在再写，幂等）。⚠️ 别改用 `extraboardargs` 承载 —— 那是 rkmpp-mpv 扩展写 `cma=512M` 的键，boot 脚本对同名键取最后一次值，两处写等于互相吃参数。
+- `build.env` 里的 `DESKTOP_TIER` **只对单版 workflow 生效**：`build-all.yml` 组装参数时不看它，桌面向一律强制 `DESKTOP_TIER=minimal`（6h runner 时限下的省时装包）。所以板卡 `build.env` 写 `mid` 是表达「本机推荐的完整形态」，批量版产物仍比它小 —— 换 workflow 得到不同体积是设计如此，不是配置漂移。
 - `.DS_Store` / `._*` / `*.bak*` 不入库。
 - **workflow 里 `${{ }}` 一律经 `env:` 落地，不直接写进 `run:`**：`run` 脚本里未加引号的
   `${{ inputs.* }}` / `${{ matrix.* }}` / `${{ github.ref_name }}` 都是**shell 代码**，一个空格或引号

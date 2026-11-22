@@ -29,6 +29,8 @@ on:
           - h96s
           - am60-sa12
           - aio-3288c
+          - cm3588-nas
+          - rock-5-itx
 
       release:
         description: "发行版 (default=跟随板卡; X11 硬解栈首选 trixie, 预编译 deb 只匹配 trixie)"
