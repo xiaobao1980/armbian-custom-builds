@@ -84,7 +84,9 @@ apply_cma() {
     # 存在 extraboardargs 行 → 替换该行；否则追加
     if grep -qE '^extraboardargs=' "$ARMBIANENV"; then
       local tmp; tmp="$(mktemp)"
-      sed -E "s|^extraboardargs=.*|extraboardargs=${newval}|" "$ARMBIANENV" > "$tmp"
+      # 值经 ENVIRON 交给 awk，不拼进 sed 替换式：newval 来自文件本身，
+      # 其中的 & 会被 sed 解释成「整段匹配」，把启动参数原地吃掉。
+      CMA_LINE="extraboardargs=${newval}" awk '{ if ($0 ~ /^extraboardargs=/) print ENVIRON["CMA_LINE"]; else print }' "$ARMBIANENV" > "$tmp"
       cat "$tmp" > "$ARMBIANENV"; rm -f "$tmp"
     else
       printf 'extraboardargs=%s\n' "$newval" >> "$ARMBIANENV"

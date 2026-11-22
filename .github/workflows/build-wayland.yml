@@ -171,7 +171,9 @@ on:
 jobs:
   build:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 360
+    # 340 而不是 360: GitHub job 硬上限就是 360 分钟，撞线会被杀在
+    # artifact / 日志上传中途（产物丢失、Release 半截）。留 20 分钟给收尾。
+    timeout-minutes: 340
     permissions:
       contents: write
     steps:
@@ -183,12 +185,19 @@ jobs:
       # 不进 env 回显），立刻加掩码，后续所有 step 的 env 回显都会显示成 ***。
       - name: 注册密码掩码 (先于任何 env 回显, 避免明文进日志)
         run: |
-          mask() { if [ -n "$1" ]; then echo "::add-mask::$1"; fi; return 0; }
-          if [ -r "${GITHUB_EVENT_PATH:-/dev/null}" ] && command -v jq >/dev/null 2>&1; then
+          mask() { if [ -n "$1" ]; then echo "::add-mask::$1"; return 0; fi; return 0; }
+          # 掩码是"尽力而为"的兜底：读不到 event JSON 或缺 jq 时以前会静默跳过，
+          # 于是"以为已掩码"的后续步骤照旧把明文写进日志。现在显式告警。
+          # （真正的防线是：口令只在 0600 凭据文件里走，编译步骤的 env 已不再带口令。）
+          if [ ! -r "${GITHUB_EVENT_PATH:-/dev/null}" ]; then
+            echo "::warning::读不到 event JSON，密码掩码未注册（本 workflow 的口令只走凭据文件，不进 env/日志）"
+          elif ! command -v jq >/dev/null 2>&1; then
+            echo "::warning::无 jq，密码掩码未注册（同上，口令不依赖 env 通道）"
+          else
             mask "$(jq -r '.inputs.user_password // ""' "$GITHUB_EVENT_PATH" 2>/dev/null)"
             mask "$(jq -r '.inputs.root_password // ""' "$GITHUB_EVENT_PATH" 2>/dev/null)"
+            echo "密码掩码已注册"
           fi
-          echo "密码掩码已注册"
 
       - name: Free disk space (构建需要 ~50GB)
         uses: jlumbroso/free-disk-space@main
@@ -202,9 +211,11 @@ jobs:
           swap-storage: false
 
       - name: 注册 QEMU binfmt (跨架构 arm64/armhf 构建必需)
+        env:
+          IN_BOARD: ${{ inputs.board }}
         run: |
           set -euo pipefail
-          if [ "$(uname -m)" = "aarch64" ] && [ "${{ inputs.board }}" != "aio-3288c" ]; then
+          if [ "$(uname -m)" = "aarch64" ] && [ "${IN_BOARD}" != "aio-3288c" ]; then
             echo "原生 arm64 runner + arm64 目标, 无需 qemu binfmt"
             exit 0
           fi
@@ -219,37 +230,20 @@ jobs:
           ls /proc/sys/fs/binfmt_misc/
 
       - name: Clone armbian/build (${{ inputs.build_ref }})
+        env:
+          BUILD_REF: ${{ inputs.build_ref }}
         run: |
-          git clone --depth=1 --branch "${{ inputs.build_ref }}" \
+          set -euo pipefail
+          # build_ref 是自由文本，原样内插进 run: 就是一条以 runner 令牌执行的命令，
+          # 故一律先落 env 再引用。
+          [ -n "${BUILD_REF}" ] || { echo "::error::build_ref 为空"; exit 1; }
+          git clone --depth=1 --branch "${BUILD_REF}" \
             https://github.com/armbian/build armbian-build
 
       - name: 同步板卡自定义文件 (仅该板卡, 互不干扰)
-        run: bash scripts/sync-board-to-build.sh "${{ inputs.board }}" armbian-build
-
-      - name: 预拉 rkmpp-stack 预编译包 (避免 CI 6h 上限内编不完)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -uo pipefail
-          D="armbian-build/userpatches/extensions/rkmpp-mpv/prebuilt"
-          mkdir -p "$D"
-          if command -v gh >/dev/null 2>&1; then
-            OK=0
-            # 顺序：当前发行版专用包优先（noble 走 wayland 版），再回退通用 trixie 包
-            for TAG in rkmpp-stack-v0.41.0-noble-arm64 rkmpp-stack-v0.41.0-2 rkmpp-stack-v0.41.0-1; do
-              if gh release download "$TAG" --repo "$GH_REPO" \
-                   --pattern 'rkmpp-stack_*_arm64.deb' --dir "$D"; then
-                echo "预编译包已就位（$TAG）:"; ls -lh "$D"; OK=1; break
-              fi
-              echo "::notice::$TAG 不可用，尝试下一个 tag"
-            done
-            if [ "$OK" != "1" ]; then
-              echo "::warning::预编译包下载失败, rkmpp-mpv 扩展将回退源码编译(可能撞 6h 上限)"
-            fi
-          else
-            echo "::warning::无 gh CLI, rkmpp-mpv 扩展将回退源码编译"
-          fi
+          IN_BOARD: ${{ inputs.board }}
+        run: bash scripts/sync-board-to-build.sh "${IN_BOARD}" armbian-build
 
       - name: 计算构件缓存键 (kernel/u-boot 与 rootfs 分离)
         id: cache-key
@@ -332,13 +326,15 @@ jobs:
 
       - name: "全新编译模式: 清空历史 kernel/u-boot debs"
         if: ${{ inputs.kernel_uboot_mode != 'reuse' }}
+        env:
+          MODE: ${{ inputs.kernel_uboot_mode }}
         run: |
           set -euo pipefail
           mkdir -p armbian-build/output/debs
           n=$(find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f | wc -l)
           find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f -delete
           echo "::notice::已跳过历史 debs 缓存并清空 ${n} 个文件, kernel/u-boot 将从源码编译"
-          if [ "${{ inputs.kernel_uboot_mode }}" = "fresh-strict" ]; then
+          if [ "${MODE}" = "fresh-strict" ]; then
             echo "::notice::fresh-strict: 额外传 ARTIFACT_IGNORE_CACHE=yes, 连 rootfs 与远程 OCI 缓存也全部禁用 (最慢)"
           else
             echo "::notice::fresh: rootfs 缓存仍复用, 只有 kernel/u-boot 全新编译"
@@ -364,8 +360,12 @@ jobs:
           [ -f "$BE" ] || { echo "::error::找不到 $BE"; exit 1; }
           set -a; source "$BE"; set +a
 
-          echo "::add-mask::${IN_UPASS}"
-          [ -n "${IN_RPASS}" ] && echo "::add-mask::${IN_RPASS}" || true
+          # 二次掩码兜底：第一步从 event JSON 取不到值（无 jq / 不可读）时这里仍能补上。
+          # 空值必须跳过 —— `::add-mask::` 后面留空会让 runner 报无值命令，
+          # 而且「掩一个空串」等于给日志里所有位置盖掩码。
+          mask() { if [ -n "$1" ]; then echo "::add-mask::$1"; return 0; fi; return 0; }
+          mask "${IN_UPASS}"
+          mask "${IN_RPASS}"
 
           if [ -n "${IN_USER}" ]; then
             [[ "${IN_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
@@ -400,7 +400,10 @@ jobs:
           # wifi 无 wlan0、蓝牙固件(combo 芯片依赖 wifi 驱动加载)无响应（103 实测）。
           EXT="${ENABLE_EXTENSIONS:-}"
           add_ext() { case ",${EXT}," in *",$1,"*) ;; *) EXT="${EXT:+${EXT},}$1" ;; esac; }
-          [ -n "${IN_USER}" ] && add_ext default-user
+          # default-user 的启用条件与凭据步骤保持一致：用户名**或** root 口令任一非空。
+          # 只看用户名的话，「user_name 空 + root_password 非空」写出了
+          # .default-user.env 却没有扩展来读它（除非恰好也开了中文扩展）。
+          { [ -n "${IN_USER}" ] || [ -n "${IN_RPASS}" ]; } && add_ext default-user
           [ "${IN_CHINESE}" = "true" ] && add_ext rk35xx-chinese-desktop
           add_ext chromium-rkmpp
           add_ext rkmpp-mpv
@@ -452,8 +455,12 @@ jobs:
       # 只靠 step 的 env: 传 DEFAULT_USER_NAME，扩展读到时是空的，会静默跳过建用户。
       # 文件通道不进 CLI 参数（不污染日志/进程列表），扩展读取后立刻删除。
       - name: 准备构建期用户凭据 (文件通道, 规避 sudo 环境白名单)
-        # 扩展以 DEFAULT_USER_NAME 为总开关：没有用户名时连 root 密码也不处理，故这里同条件
-        if: ${{ inputs.user_name != '' }}
+        # ⚠️ 门控条件不能只看 user_name：.rk-cn-pass.env 里的 RK_CN_ROOT_PASS 与
+        # user_name 无关（rk35xx-chinese-desktop 自己建用户，server 镜像也走它）。
+        # 以前 `if: user_name != ''` 让「留空用户名、只填 root 密码」的用法整步跳过 →
+        # root 密码静默不生效（扩展已取消内置弱口令兜底，留空即不设口令）。
+        # 现在：用户名或 root 密码任一非空就进来，内部再按项分支。
+        if: ${{ inputs.user_name != '' || inputs.root_password != '' }}
         env:
           IN_USER: ${{ inputs.user_name }}
           IN_UPASS: ${{ inputs.user_password }}
@@ -467,37 +474,91 @@ jobs:
           mkdir -p "$(dirname "${DEST}")"
           umask 077
           : > "${DEST}"
-          {
-            printf 'DEFAULT_USER_NAME=%q\n' "${IN_USER}"
-            printf 'DEFAULT_USER_PASSWORD=%q\n' "${IN_UPASS}"
-            printf 'DEFAULT_USER_SHELL=%q\n' "/bin/bash"
-            printf 'DEFAULT_DESKTOP_SESSION_TYPE=%q\n' "wayland"
-            if [ "${IN_NOPASSWD}" = "true" ]; then
-              printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "yes"
-            else
-              printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "no"
-            fi
-            if [ "${IN_AUTOLOGIN}" = "true" ]; then
-              printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "yes"
-            else
-              printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "no"
-            fi
-            if [ -n "${IN_GROUPS}" ]; then
-              printf 'DEFAULT_USER_GROUPS=%q\n' "${IN_GROUPS}"
-            fi
-            if [ -n "${IN_RPASS}" ]; then
-              printf 'DEFAULT_ROOT_PASSWORD=%q\n' "${IN_RPASS}"
-            fi
-          } >> "${DEST}"
-          chmod 600 "${DEST}"
-          echo "::notice::用户凭据已写入 userpatches/.default-user.env (0600)，扩展读取后即删除"
+          # 用户名非空：整套用户键都写；用户名留空则只写 root 口令一行 ——
+          # 扩展侧 _default_user_enabled 现在同时认 DEFAULT_USER_NAME 与 DEFAULT_ROOT_PASSWORD，
+          # 于是「user_name 空 + root_password 非空」也能真正落地（以前整步被
+          # `if: inputs.user_name != ''` 门控跳过，root 口令静默丢失）。
+          if [ -n "${IN_USER}" ]; then
+            {
+              printf 'DEFAULT_USER_NAME=%q\n' "${IN_USER}"
+              printf 'DEFAULT_USER_PASSWORD=%q\n' "${IN_UPASS}"
+              printf 'DEFAULT_USER_SHELL=%q\n' "/bin/bash"
+              printf 'DEFAULT_DESKTOP_SESSION_TYPE=%q\n' "wayland"
+              if [ "${IN_NOPASSWD}" = "true" ]; then
+                printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "yes"
+              else
+                printf 'DEFAULT_SUDO_NOPASSWD=%q\n' "no"
+              fi
+              if [ "${IN_AUTOLOGIN}" = "true" ]; then
+                printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "yes"
+              else
+                printf 'DEFAULT_DESKTOP_AUTOLOGIN=%q\n' "no"
+              fi
+              if [ -n "${IN_GROUPS}" ]; then
+                printf 'DEFAULT_USER_GROUPS=%q\n' "${IN_GROUPS}"
+              fi
+            } >> "${DEST}"
+          fi
+          if [ -n "${IN_RPASS}" ]; then
+            printf 'DEFAULT_ROOT_PASSWORD=%q\n' "${IN_RPASS}" >> "${DEST}"
+          fi
+          if [ -s "${DEST}" ]; then
+            chmod 600 "${DEST}"
+          else
+            rm -f "${DEST}"
+            echo "::notice::user_name 与 root_password 均为空：不写 .default-user.env（扩展零副作用）"
+          fi
+
+          # rk35xx-chinese-desktop 读的是 RK_CN_* 而非 DEFAULT_*，同样必须走文件通道：
+          # 只靠本步骤之外的 step env: 传口令，会被 sudo --preserve-env 白名单丢弃，
+          # 扩展侧于是静默烧进内置弱口令（本次修复的根因）。留空的项不写。
+          CN_DEST="armbian-build/userpatches/.rk-cn-pass.env"
+          : > "${CN_DEST}"
+          if [ -n "${IN_USER}" ]; then
+            printf 'RK_CN_USER=%q\n' "${IN_USER}" >> "${CN_DEST}"
+          fi
+          if [ -n "${IN_UPASS}" ]; then
+            printf 'RK_CN_USER_PASS=%q\n' "${IN_UPASS}" >> "${CN_DEST}"
+          fi
+          if [ -n "${IN_RPASS}" ]; then
+            printf 'RK_CN_ROOT_PASS=%q\n' "${IN_RPASS}" >> "${CN_DEST}"
+          fi
+          # 全空输入不留空文件：扩展 source 空文件是无操作，但删掉更干净、
+          # 也不会让后面的清理步骤误以为有凭据落地过。
+          [ -s "${CN_DEST}" ] || rm -f "${CN_DEST}"
+          chmod 600 "${CN_DEST}" 2>/dev/null || true
+          # 只报【键名】，绝不回显值（值就是口令本身，日志不受 GitHub 掩码保护）。
+          # 现场排障最常问的是「root 口令到底进没进构建」，看这一行就有答案。
+          keys_only() {
+            if [ ! -s "$1" ]; then printf '（未写入）'; return 0; fi
+            cut -d= -f1 "$1" | paste -sd, -
+          }
+          K_DEFAULT="$(keys_only "${DEST}")"
+          K_CN="$(keys_only "${CN_DEST}")"
+          echo "::notice::凭据文件（0600，扩展读后即删）.default-user.env[${K_DEFAULT}] .rk-cn-pass.env[${K_CN}]"
+
+      # 预编译包只对「编译它的发行版」有效，必须等 args 步骤解析出最终 RELEASE 再选 tag。
+      # 原先这里无条件先下 noble 包：板卡默认 release 不是 noble 时拿到跨发行版包，
+      # 扩展比对 build-info 后照样回退源码编译 —— 6h 超时风险一点没省。
+      - name: 预拉 rkmpp-stack 预编译包 (避免 CI 6h 上限内编不完)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          IN_RELEASE: ${{ steps.args.outputs.release }}
+        run: bash scripts/fetch-prebuilt-rkmpp.sh "${IN_RELEASE}"
 
       - name: 预检 (Wayland 硬解栈可用性)
+        env:
+          ABOARD_IN: ${{ steps.args.outputs.board }}
+          REL_IN: ${{ steps.args.outputs.release }}
+          DE_IN: ${{ steps.args.outputs.desktop }}
+          IN_ALLOW_NO_HWDEC: ${{ inputs.allow_no_hwdec }}
+          IN_CHINESE: ${{ inputs.chinese }}
         run: |
           set -uo pipefail
           # 注意：workflow 的板卡目录名 ≠ armbian 的 BOARD（h96s 目录里是 h96-m9.csc），
           # 必须用 args 步骤从 build.env 解析出来的真实 BOARD
-          ABOARD="${{ steps.args.outputs.board }}"
+          ABOARD="${ABOARD_IN}"
           # 板卡描述文件可能是 .csc（社区板）也可能是 .conf（官方/半官方，如 am60-sa12.conf）
           CSC=""
           for ext in csc conf; do
@@ -508,8 +569,8 @@ jobs:
           done
           FAMILY=$(sed -n 's/^BOARDFAMILY=//p' "${CSC:-/dev/null}" 2>/dev/null | tr -d '"' | head -1)
           FAMILY="${FAMILY:-unknown}"
-          REL="${{ steps.args.outputs.release }}"
-          DE="${{ steps.args.outputs.desktop }}"
+          REL="${REL_IN}"
+          DE="${DE_IN}"
 
           echo "板卡=${ABOARD} 家族=${FAMILY} 发行版=${REL} 桌面=${DE}"
 
@@ -530,7 +591,7 @@ jobs:
               echo "硬解栈: chromium-rkmpp（chromium 126+rkmpp；jammy 无 panthor overlay，GPU 走发行版 mesa）"
               ;;
             *)
-              if [ "${{ inputs.allow_no_hwdec }}" = "true" ]; then
+              if [ "${IN_ALLOW_NO_HWDEC}" = "true" ]; then
                 echo "::warning::${REL} 上 chromium-rkmpp 会自动跳过（PPA 只发布 jammy/noble）—— 本镜像**不含网页硬解**，但桌面/中文环境/输入法完整可用。"
               else
                 echo "::error::${REL} 上没有网页硬解路径：chromium-rkmpp 的 PPA 只发布 jammy/noble。请把 release 改成 noble（或 jammy）；若只要桌面+中文环境，请保持 allow_no_hwdec 开启（默认已开启）。"
@@ -540,7 +601,7 @@ jobs:
           esac
 
           # 中文环境：所有发行版默认生效（Ubuntu 走 language-pack-*，Debian 走 locales-all + 自带翻译）
-          if [ "${{ inputs.chinese }}" = "true" ]; then
+          if [ "${IN_CHINESE}" = "true" ]; then
             echo "中文环境: 开启（${REL}，Ubuntu/Debian 自适应，含 AccountsService 会话语言）"
           else
             echo "中文环境: 关闭（镜像为英文界面）"
@@ -552,53 +613,75 @@ jobs:
           esac
 
       - name: 构建摘要
+        env:
+          S_BOARD: ${{ inputs.board }}
+          S_REL: ${{ steps.args.outputs.release }}
+          S_BRANCH: ${{ steps.args.outputs.branch }}
+          S_DESKTOP: ${{ steps.args.outputs.desktop }}
+          S_TIER: ${{ inputs.desktop_tier }}
+          S_USER: ${{ inputs.user_name }}
+          S_NOPASS: ${{ inputs.sudo_nopasswd }}
+          S_AUTOLOGIN: ${{ inputs.desktop_autologin }}
+          S_CHINESE: ${{ inputs.chinese }}
+          S_EXT: ${{ steps.args.outputs.extensions }}
+          S_COMPRESS: ${{ inputs.compress }}
+          S_MODE: ${{ inputs.kernel_uboot_mode }}
+          S_TAG: ${{ inputs.cache_tag }}
+          S_ARGS: ${{ steps.args.outputs.args }}
         run: |
+          # 全部走 env：这里是无引号 heredoc，原样内插 inputs.*（user_name 等自由文本）
+          # 会被 shell 二次展开，`$(…)` 就地执行。
+          BASELINE="${S_TAG}"; [ -n "${S_TAG}" ] || BASELINE="最新"
           cat <<EOF
           ┌────────────────────────────────────────────────┐
             Wayland 定制版
-            板卡        : ${{ inputs.board }}
-            发行版      : ${{ steps.args.outputs.release }}   (分支 ${{ steps.args.outputs.branch }})
-            桌面        : ${{ steps.args.outputs.desktop }} / 档位 ${{ inputs.desktop_tier }}
-            默认用户    : ${{ inputs.user_name }}   (sudo免密=${{ inputs.sudo_nopasswd }}, 自动登录=${{ inputs.desktop_autologin }})
-            中文环境    : ${{ inputs.chinese }}   (所有发行版默认开启)
-            扩展        : ${{ steps.args.outputs.extensions }}
-            压缩        : ${{ inputs.compress }}
-          构件模式    : ${{ inputs.kernel_uboot_mode }}   历史基线: ${{ inputs.cache_tag == '' && '最新' || inputs.cache_tag }}
+            板卡        : ${S_BOARD}
+            发行版      : ${S_REL}   (分支 ${S_BRANCH})
+            桌面        : ${S_DESKTOP} / 档位 ${S_TIER}
+            默认用户    : ${S_USER}   (sudo免密=${S_NOPASS}, 自动登录=${S_AUTOLOGIN})
+            中文环境    : ${S_CHINESE}   (所有发行版默认开启)
+            扩展        : ${S_EXT}
+            压缩        : ${S_COMPRESS}
+          构件模式    : ${S_MODE}   历史基线: ${BASELINE}
           ────────────────────────────────────────────────
-          最终参数: ${{ steps.args.outputs.args }}
+          最终参数: ${S_ARGS}
           EOF
 
       - name: 编译镜像
         env:
           RK_STRICT_ARGS: ${{ inputs.kernel_uboot_mode == 'fresh-strict' && 'ARTIFACT_IGNORE_CACHE=yes' || '' }}
+          BUILD_ARGS: ${{ steps.args.outputs.args }}
+          BUILD_COMPRESS: ${{ steps.args.outputs.compress }}
+          # 用户设置：非敏感项走 env；⚠️【口令一律不走 env】——
+          # compile.sh 的 sudo --preserve-env 白名单会把它们丢掉（env 通道在 CI 里本就无效），
+          # 同时 SHARE_LOG=yes 的构建日志/失败 artifact 不受 GitHub 掩码保护，留一份 env 就多一份明文。
+          # 口令唯一通道 = 前面写的 userpatches/.default-user.env 与 .rk-cn-pass.env（0600，读后即删）。
           DEFAULT_USER_NAME: ${{ inputs.user_name }}
-          DEFAULT_USER_PASSWORD: ${{ inputs.user_password }}
-          DEFAULT_ROOT_PASSWORD: ${{ inputs.root_password }}
           DEFAULT_USER_GROUPS: ${{ inputs.user_groups }}
           DEFAULT_USER_SHELL: /bin/bash
           DEFAULT_SUDO_NOPASSWD: ${{ inputs.sudo_nopasswd && 'yes' || 'no' }}
           DEFAULT_DESKTOP_AUTOLOGIN: ${{ inputs.desktop_autologin && 'yes' || 'no' }}
           DEFAULT_DESKTOP_SESSION_TYPE: wayland
           RK_CN_USER: ${{ inputs.user_name }}
-          RK_CN_USER_PASS: ${{ inputs.user_password }}
-          RK_CN_ROOT_PASS: ${{ inputs.root_password }}
           RK_CN_IME: auto
+        # 编译步骤单独限时，留出 job 收尾（构件检查 / 产物上传 / 日志上传）的时间预算
+        timeout-minutes: 320
         run: |
           cd armbian-build
           ./compile.sh \
-            ${{ steps.args.outputs.args }} \
+            ${BUILD_ARGS} \
             KERNEL_CONFIGURE=no \
             KERNEL_BTF=no \
             EXPERT=yes \
             SHARE_LOG=yes \
-            COMPRESS_OUTPUTIMAGE=${{ steps.args.outputs.compress }} \
+            COMPRESS_OUTPUTIMAGE=${BUILD_COMPRESS} \
             ${RK_STRICT_ARGS} \
             build
 
       # 双保险：扩展读后已自删；这里兜住「扩展没跑到/编译中途失败」的残留
       - name: 清理用户凭据文件 (无论成败)
         if: always()
-        run: rm -f armbian-build/userpatches/.default-user.env && echo "凭据文件已清理"
+        run: rm -f armbian-build/userpatches/.default-user.env armbian-build/userpatches/.rk-cn-pass.env && echo "凭据文件已清理"
 
       - name: 检查可保存的构件
         id: cache-payload
@@ -643,6 +726,9 @@ jobs:
           BOARD_NAME: ${{ inputs.board }}
           BUILD_ARGS: ${{ steps.args.outputs.args }}
           USER_NAME: ${{ inputs.user_name }}
+          S_DESKTOP: ${{ steps.args.outputs.desktop }}
+          S_AUTOLOGIN: ${{ inputs.desktop_autologin }}
+          S_CHINESE: ${{ inputs.chinese }}
         run: |
           set -euo pipefail
           DATE_TAG="$(date -u +%Y%m%d)"
@@ -673,10 +759,10 @@ jobs:
           | 项 | 值 |
           |---|---|
           | 板卡 | ${BOARD_NAME} |
-          | 桌面 | Wayland / ${{ steps.args.outputs.desktop }} |
+          | 桌面 | Wayland / ${S_DESKTOP} |
           | 默认用户 | \`${USER_NAME}\` |
-          | 桌面自动登录 | ${{ inputs.desktop_autologin }} |
-          | 中文环境 | ${{ inputs.chinese }} |
+          | 桌面自动登录 | ${S_AUTOLOGIN} |
+          | 中文环境 | ${S_CHINESE} |
           | 硬解栈 | chromium-rkmpp（chromium 132/126+rkmpp，仅 jammy/noble 有效）+ configng mesa/panthor |
           | 构建参数 | \`${BUILD_ARGS}\` |
           | 构建时间 (UTC) | $(date -u '+%Y-%m-%d %H:%M') |

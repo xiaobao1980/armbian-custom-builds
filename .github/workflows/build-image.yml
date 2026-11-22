@@ -139,7 +139,9 @@ on:
 jobs:
   build:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 360
+    # 340 而不是 360: GitHub job 硬上限就是 360 分钟，撞线会被杀在
+    # artifact / 日志上传中途（产物丢失、Release 半截）。留 20 分钟给收尾。
+    timeout-minutes: 340
     permissions:
       contents: write    # 发布 Release 需要
     steps:
@@ -180,42 +182,20 @@ jobs:
             || grep -hl 'aarch64' /proc/sys/fs/binfmt_misc/* 2>/dev/null || true
 
       - name: Clone armbian/build (${{ inputs.build_ref }})
+        env:
+          BUILD_REF: ${{ inputs.build_ref }}
         run: |
-          git clone --depth=1 --branch "${{ inputs.build_ref }}" \
+          set -euo pipefail
+          [ -n "${BUILD_REF}" ] || { echo "::error::build_ref 为空"; exit 1; }
+          # build_ref 是自由文本：原样内插进 run: 时 `main"; curl … | sh; #` 会以
+          # runner 令牌执行任意命令，故一律经 env 传值再引用。
+          git clone --depth=1 --branch "${BUILD_REF}" \
             https://github.com/armbian/build armbian-build
 
       - name: 同步板卡自定义文件 (仅该板卡, 互不干扰)
-        run: bash scripts/sync-board-to-build.sh "${{ inputs.board }}" armbian-build
-
-      - name: 预拉 rkmpp-stack 预编译包 (避免 CI 6h 上限内编不完)
-        # 背景: GitHub-hosted runner 只有 2 vCPU; x86 上还需 qemu 模拟 arm64, 栈源码编译
-        # 实测 mpp 17.5m + ffmpeg 3h09m + mpv >1h, 加上 kernel 1h52m 必然撞 6h 上限
-        # (run 40623907079 即在 mpv 68/258 处被 cancel)。故默认走 11MB 预编译 deb,
-        # 秒级安装; 下载失败时扩展自动回退源码编译。
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -uo pipefail
-          D="armbian-build/userpatches/extensions/rkmpp-mpv/prebuilt"
-          mkdir -p "$D"
-          if command -v gh >/dev/null 2>&1; then
-            # 优先 -2（含桌面菜单项 mpv-desktop / rkmpp-mpv.svg + postinst 强制重建图标缓存），
-            # 未发布则退回 -1（无桌面集成，装上后菜单里搜不到 mpv）。
-            OK=0
-            for TAG in rkmpp-stack-v0.41.0-2 rkmpp-stack-v0.41.0-1; do
-              if gh release download "$TAG" --repo "$GH_REPO" \
-                   --pattern 'rkmpp-stack_*_arm64.deb' --dir "$D"; then
-                echo "预编译包已就位（$TAG）:"; ls -lh "$D"; OK=1; break
-              fi
-              echo "::notice::$TAG 不可用，尝试下一个 tag"
-            done
-            if [ "$OK" != "1" ]; then
-              echo "::warning::预编译包下载失败, rkmpp-mpv 扩展将回退源码编译(可能撞 6h 上限)"
-            fi
-          else
-            echo "::warning::无 gh CLI, rkmpp-mpv 扩展将回退源码编译"
-          fi
+          IN_BOARD: ${{ inputs.board }}
+        run: bash scripts/sync-board-to-build.sh "${IN_BOARD}" armbian-build
 
       - name: 计算构件缓存键 (kernel/u-boot 与 rootfs 分离)
         id: cache-key
@@ -300,13 +280,15 @@ jobs:
 
       - name: "全新编译模式: 清空历史 kernel/u-boot debs"
         if: ${{ inputs.kernel_uboot_mode != 'reuse' }}
+        env:
+          MODE: ${{ inputs.kernel_uboot_mode }}
         run: |
           set -euo pipefail
           mkdir -p armbian-build/output/debs
           n=$(find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f | wc -l)
           find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f -delete
           echo "::notice::已跳过历史 debs 缓存并清空 ${n} 个文件, kernel/u-boot 将从源码编译"
-          if [ "${{ inputs.kernel_uboot_mode }}" = "fresh-strict" ]; then
+          if [ "${MODE}" = "fresh-strict" ]; then
             echo "::notice::fresh-strict: 额外传 ARTIFACT_IGNORE_CACHE=yes, 连 rootfs 与远程 OCI 缓存也全部禁用 (最慢)"
           else
             echo "::notice::fresh: rootfs 缓存仍复用, 只有 kernel/u-boot 全新编译"
@@ -395,37 +377,70 @@ jobs:
 
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
           echo "compress=${COMPRESS}" >> "$GITHUB_OUTPUT"
+          echo "release=${RELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: 预拉 rkmpp-stack 预编译包 (避免 CI 6h 上限内编不完)
+        # 背景: GitHub-hosted runner 只有 2 vCPU; x86 上还需 qemu 模拟 arm64, 栈源码编译
+        # 实测 mpp 17.5m + ffmpeg 3h09m + mpv >1h, 加上 kernel 1h52m 必然撞 6h 上限
+        # (run 40623907079 即在 mpv 68/258 处被 cancel)。故默认走 11MB 预编译 deb,
+        # 秒级安装; 下载失败时扩展自动回退源码编译。
+        # ⚠️ 必须排在 args 步骤【之后】：只有那里才知道最终 RELEASE（板卡默认 + 用户下拉），
+        # 而预编译包只对编译它的发行版有效（扩展按包内 DISTRO_CODENAME 比对，不匹配就回退源码编译）。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          IN_RELEASE: ${{ steps.args.outputs.release }}
+        run: bash scripts/fetch-prebuilt-rkmpp.sh "${IN_RELEASE}"
 
       - name: 构建摘要
+        env:
+          S_BOARD: ${{ inputs.board }}
+          S_EDITION: ${{ inputs.edition }}
+          S_DE: ${{ inputs.desktop_environment }}
+          S_TIER: ${{ inputs.desktop_tier }}
+          S_KB: ${{ inputs.kernel_branch }}
+          S_KV: ${{ inputs.kernel_version }}
+          S_REL: ${{ inputs.release }}
+          S_COMPRESS: ${{ inputs.compress }}
+          S_MODE: ${{ inputs.kernel_uboot_mode }}
+          S_TAG: ${{ inputs.cache_tag }}
+          S_ARGS: ${{ steps.args.outputs.args }}
         run: |
+          # 全部走 env：内插进 heredoc 的 inputs.*（尤其 board / kernel_version 这类
+          # 自由文本）会被 shell 二次展开，`$(…)` 就地执行。
+          BASELINE="${S_TAG}"; [ -n "${S_TAG}" ] || BASELINE="最新"
           cat <<EOF
           ┌────────────────────────────────────────────┐
-            板卡        : ${{ inputs.board }}
-            镜像类型    : ${{ inputs.edition }}   (desktop / server / minimal)
-            桌面环境    : ${{ inputs.desktop_environment }}   档位: ${{ inputs.desktop_tier }}
-            内核分支    : ${{ inputs.kernel_branch }}   版本锁定: ${{ inputs.kernel_version }}
-            发行版      : ${{ inputs.release }}
-            压缩格式    : ${{ inputs.compress }}
-          构件模式    : ${{ inputs.kernel_uboot_mode }}   历史基线: ${{ inputs.cache_tag == '' && '最新' || inputs.cache_tag }}
+            板卡        : ${S_BOARD}
+            镜像类型    : ${S_EDITION}   (desktop / server / minimal)
+            桌面环境    : ${S_DE}   档位: ${S_TIER}
+            内核分支    : ${S_KB}   版本锁定: ${S_KV}
+            发行版      : ${S_REL}
+            压缩格式    : ${S_COMPRESS}
+          构件模式    : ${S_MODE}   历史基线: ${BASELINE}
           ──────────────────────────────────────────────
-          最终参数: ${{ steps.args.outputs.args }}
+          最终参数: ${S_ARGS}
           EOF
 
       - name: 编译镜像
         env:
           RK_STRICT_ARGS: ${{ inputs.kernel_uboot_mode == 'fresh-strict' && 'ARTIFACT_IGNORE_CACHE=yes' || '' }}
+          BUILD_ARGS: ${{ steps.args.outputs.args }}
+          BUILD_COMPRESS: ${{ steps.args.outputs.compress }}
+        # 编译步骤单独限时，留出 job 收尾（构件检查 / 产物上传 / 日志上传）的时间预算
+        timeout-minutes: 320
         run: |
           cd armbian-build
           # main 分支 CLI (entrypoint.sh + commands.sh) 参数顺序任意;
           # 仍保持 "KEY=VALUE 在前, 目标命令 build 在后" 的可读写法。
           # EXPERT=yes 跳过社区板(.csc)的交互确认。
           ./compile.sh \
-            ${{ steps.args.outputs.args }} \
+            ${BUILD_ARGS} \
             KERNEL_CONFIGURE=no \
             KERNEL_BTF=no \
             EXPERT=yes \
             SHARE_LOG=yes \
-            COMPRESS_OUTPUTIMAGE=${{ steps.args.outputs.compress }} \
+            COMPRESS_OUTPUTIMAGE=${BUILD_COMPRESS} \
             ${RK_STRICT_ARGS} \
             build
 
@@ -472,6 +487,7 @@ jobs:
           BOARD_NAME: ${{ inputs.board }}
           EDITION_NAME: ${{ inputs.edition }}
           BUILD_ARGS: ${{ steps.args.outputs.args }}
+          BUILD_REF: ${{ inputs.build_ref }}
         run: |
           set -euo pipefail
           # 版本保留: tag 带 run 号, 每次构建独立 Release, 所有版本镜像都保留
@@ -508,7 +524,7 @@ jobs:
           | 板卡 | ${BOARD_NAME} |
           | 镜像类型 | ${EDITION_NAME} |
           | 构建参数 | \`${BUILD_ARGS}\` |
-          | armbian/build 引用 | ${{ inputs.build_ref }} |
+          | armbian/build 引用 | ${BUILD_REF} |
           | 构建时间 (UTC) | $(date -u '+%Y-%m-%d %H:%M') |
 
           ### 烧写

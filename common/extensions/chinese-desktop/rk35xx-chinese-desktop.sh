@@ -21,8 +21,8 @@
 #   RK_CN_DESKTOP_ENV    gnome|xfce|mate|cinnamon... 桌面环境名（决定输入法框架）
 #   RK_CN_IME            auto|fcitx5|ibus            强制输入法框架（默认 auto）
 #   RK_CN_USER           普通用户名（默认 xiaobao）
-#   RK_CN_USER_PASS      普通用户密码（默认 123456）
-#   RK_CN_ROOT_PASS      root 密码（默认 123456789）
+#   RK_CN_USER_PASS      普通用户密码（留空=不设置该密码，绝不兜底默认口令）
+#   RK_CN_ROOT_PASS      root 密码（留空=不设置该密码，绝不兜底默认口令）
 #   RK_CN_TZ             时区（默认 Asia/Shanghai）
 #   RK_CN_LOCALES_ALL    1|0  Debian 上是否装 locales-all（默认 1）
 #   RK_CN_RIME_MIRROR    可选：优先使用的 rime-ice 镜像前缀（留空走内置多镜像回退）
@@ -36,8 +36,10 @@ RK_CN_BUILD_DESKTOP="${RK_CN_BUILD_DESKTOP:-no}"
 RK_CN_DESKTOP_ENV="${RK_CN_DESKTOP_ENV:-xfce}"
 RK_CN_IME="${RK_CN_IME:-auto}"
 RK_CN_USER="${RK_CN_USER:-xiaobao}"
-RK_CN_USER_PASS="${RK_CN_USER_PASS:-123456}"
-RK_CN_ROOT_PASS="${RK_CN_ROOT_PASS:-123456789}"
+# 口令留空 = 不设置该口令。此处**不再兜底任何默认口令**：历史实现写死
+# 123456/123456789，CI 的 env 一旦因 sudo 白名单丢失就静默烧进成品镜像。
+RK_CN_USER_PASS="${RK_CN_USER_PASS:-}"
+RK_CN_ROOT_PASS="${RK_CN_ROOT_PASS:-}"
 RK_CN_TZ="${RK_CN_TZ:-Asia/Shanghai}"
 RK_CN_LOCALES_ALL="${RK_CN_LOCALES_ALL:-1}"
 
@@ -121,61 +123,106 @@ rk_cn_is_ubuntu() {
 #   · 用 rc.local（+ rc-local.service）调用，幂等（done 标记）。
 #   · 必须早于显示管理器启动，否则自动登录找不到用户（见 rk_cn_autologin_order）。
 rk_cn_setup_user() {
-	log "设置 root 密码"
-	echo "root:${RK_CN_ROOT_PASS}" | chpasswd 2>/dev/null || log "警告: root 密码设置失败"
+	if [ -n "${RK_CN_ROOT_PASS}" ]; then
+		log "设置 root 密码"
+		echo "root:${RK_CN_ROOT_PASS}" | chpasswd 2>/dev/null || log "警告: root 密码设置失败"
+	else
+		log "未提供 RK_CN_ROOT_PASS：跳过 root 密码（沿用发行版默认或 default-user 扩展）"
+	fi
 
 	# 清掉 Armbian 首次登录向导标记，避免与我们的首启脚本抢用户创建
 	rm -f /root/.not_logged_in_yet /root/.not_logged_in_yet~ 2>/dev/null || true
 	rm -f /var/lib/armbian/firstrun 2>/dev/null || true
 
+	# ⚠️ 口令一律以【散列】交付，绝不明文进镜像：
+	#   旧实现用不带引号的 heredoc 把明文 root/用户口令写进 chmod 755 的
+	#   /usr/local/sbin/armbian-firstboot-user.sh，成品镜像里任何本地用户
+	#   （甚至下载了镜像的人）cat 一下就能读到明文口令；值里含 $( ) 反引号时
+	#   还会在首启以 root 执行。现在部署脚本是完全静态的（带引号 heredoc），
+	#   用户名与口令散列放在 0600 的 /etc/armbian-firstboot-user.conf，首启用完即删。
+	FB_CONF=/etc/armbian-firstboot-user.conf
+	FB_HASH=""
+	if [ -n "${RK_CN_USER_PASS}" ]; then
+		FB_HASH="$(openssl passwd -6 "${RK_CN_USER_PASS}" 2>/dev/null)"
+		[ -n "${FB_HASH}" ] || log "警告: 无法生成口令散列（openssl 不可用），首启只建用户、不设密码，请 root 登录后 passwd 设置"
+	fi
+	(
+		umask 077
+		{
+			printf 'RK_CN_USER=%s\n' "${RK_CN_USER}"
+			printf 'RK_CN_USER_HASH=%s\n' "${FB_HASH}"
+		} > "${FB_CONF}"
+	)
+	unset FB_HASH RK_CN_USER_PASS RK_CN_ROOT_PASS
+
 	log "部署首次启动建用户脚本（用户=${RK_CN_USER}）"
 	mkdir -p /usr/local/sbin /var/lib
-	cat > /usr/local/sbin/armbian-firstboot-user.sh <<EOF
+	cat > /usr/local/sbin/armbian-firstboot-user.sh <<'FBEOF'
 #!/bin/bash
-# 由 rk35xx-chinese-desktop 部署：首次启动创建普通用户并设密码（幂等）
+# 由 rk35xx-chinese-desktop 部署：首次启动创建普通用户（幂等）
+# 本脚本不含任何口令、也不含用户名：两者从 0600 的
+# /etc/armbian-firstboot-user.conf 按行 sed 取出（不 source、不做展开），应用完即删。
 [ -f /var/lib/armbian-firstboot-user.done ] && exit 0
+
+FB_CONF=/etc/armbian-firstboot-user.conf
+FB_USER=""
+FB_HASH=""
+if [ -r "$FB_CONF" ]; then
+    FB_USER=$(sed -n 's/^RK_CN_USER=//p' "$FB_CONF" | head -1)
+    FB_HASH=$(sed -n 's/^RK_CN_USER_HASH=//p' "$FB_CONF" | head -1)
+fi
+[ -n "$FB_USER" ] || FB_USER=xiaobao
 
 # ⚠️ GDM/GNOME 会话语言真来源：AccountsService Language 字段（187 实测坑，
 # 2026-11-03 noble r6：构建期写入的 /var/lib/AccountsService/users/<user>
 # 在成品镜像里消失 → GDM 回落英文）。首启兜底重建，幂等；两条分支都要生效
 # 所以放在 default-user.conf 分支判断之前。
 mkdir -p /var/lib/AccountsService/users
-cat > /var/lib/AccountsService/users/${RK_CN_USER} <<ASEOF
+cat > "/var/lib/AccountsService/users/${FB_USER}" <<ASEOF
 [User]
 Language=zh_CN.UTF-8
 SystemAccount=false
 ASEOF
-chmod 600 /var/lib/AccountsService/users/${RK_CN_USER} 2>/dev/null || true
+chmod 600 "/var/lib/AccountsService/users/${FB_USER}" 2>/dev/null || true
 
 # 幂等：若镜像已在构建期由 default-user 扩展建好用户（/etc/default-user.conf 存在），
-# 这里只同步密码/组，绝不 userdel + 重建 —— 否则首启会把构建期配好的 uid、家目录、
-# sudo 免密和自动登录对象一起抹掉，桌面直接登不进去。
+# 这里只同步 shell/附加组，绝不 userdel + 重建，也【绝不重设口令】——
+# 前者会把构建期配好的 uid、家目录、sudo 免密和自动登录对象一起抹掉，桌面直接登不进去；
+# 后者（历史实现的两处 chpasswd）会把构建期的正确口令覆盖回默认弱口令。
+# 用户名以 /etc/default-user.conf 里的实际值为准，避免与 RK_CN_USER 不一致时改错人。
 if [ -f /etc/default-user.conf ]; then
-    usermod -s /bin/bash ${RK_CN_USER} 2>/dev/null || true
+    DU_USER=$(sed -n 's/^USER=//p' /etc/default-user.conf | head -1)
+    [ -n "$DU_USER" ] || DU_USER="$FB_USER"
+    usermod -s /bin/bash "$DU_USER" 2>/dev/null || true
     for g in sudo adm plugdev audio video netdev dialout cdrom floppy tape; do
-        getent group "\$g" >/dev/null 2>&1 && usermod -aG "\$g" ${RK_CN_USER} 2>/dev/null || true
+        getent group "$g" >/dev/null 2>&1 && usermod -aG "$g" "$DU_USER" 2>/dev/null || true
     done
-    echo "root:${RK_CN_ROOT_PASS}" | chpasswd 2>/dev/null || true
-    echo "${RK_CN_USER}:${RK_CN_USER_PASS}" | chpasswd 2>/dev/null || true
+    rm -f "$FB_CONF"
     touch /var/lib/armbian-firstboot-user.done
     exit 0
 fi
 
-userdel -r ${RK_CN_USER} 2>/dev/null || true
-rm -rf /home/${RK_CN_USER} 2>/dev/null || true
-groupadd -g 1000 ${RK_CN_USER} 2>/dev/null || true
-useradd -m -s /bin/bash -u 1000 -g 1000 \\
-    -G sudo,adm,plugdev,audio,video,netdev,dialout,cdrom,floppy,tape ${RK_CN_USER} 2>/dev/null || true
-echo "root:${RK_CN_ROOT_PASS}" | chpasswd 2>/dev/null || true
-echo "${RK_CN_USER}:${RK_CN_USER_PASS}" | chpasswd 2>/dev/null || true
-chown -R ${RK_CN_USER}:${RK_CN_USER} /home/${RK_CN_USER} 2>/dev/null || true
-chmod 755 /home/${RK_CN_USER} 2>/dev/null || true
+userdel -r "$FB_USER" 2>/dev/null || true
+rm -rf "/home/${FB_USER}" 2>/dev/null || true
+groupadd -g 1000 "$FB_USER" 2>/dev/null || true
+useradd -m -s /bin/bash -u 1000 -g 1000 \
+    -G sudo,adm,plugdev,audio,video,netdev,dialout,cdrom,floppy,tape "$FB_USER" 2>/dev/null || true
+if [ -n "$FB_HASH" ]; then
+    usermod -p "$FB_HASH" "$FB_USER" 2>/dev/null || echo ">>> 警告: 口令散列写入失败"
+else
+    echo ">>> 未提供用户口令：${FB_USER} 已创建但未设密码，请 root 登录后执行 passwd ${FB_USER}"
+fi
+chown -R "${FB_USER}:${FB_USER}" "/home/${FB_USER}" 2>/dev/null || true
+chmod 755 "/home/${FB_USER}" 2>/dev/null || true
+
+# 明文口令从未落盘，散列已进 /etc/shadow：凭据 conf 用完即删
+rm -f "$FB_CONF"
 
 # 无 RTC 电池板卡每次上电时间归零：首启立即校时（失败不阻断）
 command -v ntpdate >/dev/null 2>&1 && ntpdate -u cn.pool.ntp.org >/dev/null 2>&1 || true
 
 touch /var/lib/armbian-firstboot-user.done
-EOF
+FBEOF
 	chmod 755 /usr/local/sbin/armbian-firstboot-user.sh
 
 	# rc.local 调用（Armbian 多数镜像默认无 rc.local，这里补齐）

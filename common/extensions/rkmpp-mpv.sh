@@ -92,6 +92,52 @@ function _rkmpp_mpv__cannot_build_mpv() {
 	return 1
 }
 
+# 把 cma=<want> 合并进 armbianEnv.txt 的 extraboardargs 键（不新增同名键）。
+# 与 chroot 内 rk35xx-rkmpp-mpv-build.sh、板端 /usr/local/sbin/set-cma.sh 三处语义一致 ——
+# 三处写法一旦分叉，最后一次写入者决定实际生效值，排查时只能靠开机后 cat 才发现。
+#   · 已含 cma=<want>            → 不动
+#   · 有 cma=<其它>M             → 就地替换数值，同行其它参数原样保留
+#   · 有 extraboardargs 但无 cma → 追加到该行末尾
+#   · 完全没有 extraboardargs    → 末尾新写一行
+# 出现多行同名键时（历史版本 `sed '1i'` 前插留下的），把它们全部改写成同一个合并结果：
+# boot 脚本按最后一次取值，留下内容不一致的两行等于让生效值取决于行序。
+function _rkmpp_mpv__merge_cma() {
+	local f="$1" want="${2:-512M}" cur new tmp
+	[[ -f "$f" ]] || { display_alert "Extension: ${EXTENSION}" "$f 不存在，跳过 CMA 设置" "warn"; return 0; }
+
+	# 只看 extraboardargs 键自己的值（grep 锚定行首，注释行与其它键一概不算命中）
+	cur="$(grep -E '^extraboardargs=' "$f" | tail -1 || true)"
+	cur="${cur#extraboardargs=}"
+
+	if [[ "${cur}" == *"cma=${want}"* ]]; then
+		display_alert "Extension: ${EXTENSION}" "extraboardargs 已含 cma=${want}，无需改动" "info"
+		return 0
+	fi
+
+	if [[ -n "${cur}" ]]; then
+		if [[ "${cur}" =~ cma=[0-9]+M ]]; then
+			new="$(printf '%s' "${cur}" | sed -E "s/cma=[0-9]+M/cma=${want}/")"
+		else
+			new="${cur} cma=${want}"
+		fi
+	else
+		new="cma=${want}"
+	fi
+
+	if grep -qE '^extraboardargs=' "$f"; then
+		tmp="$(mktemp)"
+		# 用 ENVIRON 传值而不是把 ${new} 拼进 sed 替换式：new 的内容来自文件本身，
+		# 里面若出现 & 或 | 会被 sed 当成特殊记号，把好端端的启动参数改坏。
+		CMA_LINE="extraboardargs=${new}" awk '{ if ($0 ~ /^extraboardargs=/) print ENVIRON["CMA_LINE"]; else print }' "$f" > "${tmp}"
+		cat "${tmp}" > "$f"
+		rm -f "${tmp}"
+	else
+		printf 'extraboardargs=%s\n' "${new}" >> "$f"
+	fi
+	display_alert "Extension: ${EXTENSION}" "已写入 extraboardargs=${new}（开机生效）" "info"
+	return 0
+}
+
 function extension_prepare_config__rkmpp_mpv() {
 	# 仅 vendor 内核 + Rockchip rk35xx/rk3588 家族（BSP 内核才带 rkmpp/RGA 驱动）
 	if [[ ! ( "${LINUXFAMILY}" =~ ^(rk35xx|rockchip-rk3588)$ && "${BRANCH}" == "vendor" ) ]]; then
@@ -164,8 +210,16 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	ASSET_DIR="${SCRIPT_DIR}/rkmpp-mpv"
 	if [[ ! -f "${ASSET_DIR}/rk35xx-rkmpp-mpv-build.sh" || ! -f "${ASSET_DIR}/mpp.patch" ]]; then
-		display_alert "rkmpp-mpv assets missing at ${ASSET_DIR}; cannot build v3 stack" "${EXTENSION}" "err"
-		return 0
+		# assets 是扩展自带、随 sync-board-to-build.sh 一起进 build 树的 —— 缺文件说明
+		# 构建树本身不完整（漏同步/被裁减），不是「可选功能缺失」。此时若只打个 err 再
+		# return 0，交付的就是一张**没有硬解但构建成功**的镜像，与下面 chroot 编译失败
+		# 故意 exit 1 的既定策略自相矛盾（run 40562290671 / 40589991000 就是这么伪装成功的）。
+		if [[ "${RKMPP_MPV_SKIP_BUILD:-no}" == "yes" ]]; then
+			display_alert "rkmpp-mpv assets missing at ${ASSET_DIR}; RKMPP_MPV_SKIP_BUILD=yes, skipping whole stack" "${EXTENSION}" "warn"
+			return 0
+		fi
+		display_alert "rkmpp-mpv assets missing at ${ASSET_DIR}; aborting image build instead of shipping a silently rkmpp-less image (确认只要桌面、不要硬解栈时设 RKMPP_MPV_SKIP_BUILD=yes)" "${EXTENSION}" "err"
+		exit 1
 	fi
 
 	# ---- 1. 把 assets 拷进 chroot ----
@@ -203,10 +257,13 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	#   mpv 编译 68/258 处被 cancel（conclusion=cancelled，非 failure）。
 	# 故默认改为安装预编译 rkmpp-stack.deb（11MB，dpkg-shlibdeps 自动算好运行库依赖），
 	#   安装耗时秒级；源码编译回退路径保留（RKMPP_MPV_PREBUILT=no 或包缺失/校验失败时）。
+	# 只找与目标架构同名的预编译包；找不到（如换架构）即走源码编译。
+	# ⚠️ 这里不能用 `ls -1 … | head -1`：框架全局是 `set -Eeuo pipefail`，glob 无匹配时
+	#   ls 退 2，pipefail 把非零传给命令替换，赋值语句于是失败 → **整场构建直接中止**，
+	#   而不是「没包可装 → 回退源码编译」。find 无匹配仍退 0，天然安全且顺序确定。
 	local PREBUILT_DIR="${ASSET_DIR}/prebuilt"
 	local DEB="" PREBUILT_OK=0
-	# 只找与目标架构同名的预编译包；找不到（如换架构）即走源码编译
-	DEB="$(ls -1 "${PREBUILT_DIR}"/rkmpp-stack_*_"${ARCH:-arm64}".deb 2>/dev/null | head -1)"
+	DEB="$(find "${PREBUILT_DIR}" -maxdepth 1 -type f -name "rkmpp-stack_*_${ARCH:-arm64}.deb" 2>/dev/null | LC_ALL=C sort | head -1 || true)"
 
 	# ---- 2.5a 发行版/架构守卫：预编译包只对「编译它的发行版+架构」有效 ----
 	# rkmpp-stack.deb 的 Depends 由 dpkg-shlibdeps 从编译机 SONAME 算出，二进制也
@@ -280,15 +337,30 @@ function post_install_kernel_debs__rkmpp_mpv() {
 	rm -f "${SDCARD}/usr/local/sbin/rk35xx-rkmpp-mpv-build.sh" \
 	      "${SDCARD}/usr/local/sbin/mkdeb-rkmpp-stack.sh"
 
+	# ---- 3.9 清编译残留：源码树 + 构建产物 + 投喂进 chroot 的 tarball/补丁/deb ----
+	# mpp/rga/ffmpeg-rockchip/mpv 的源码与中间对象在 /root/rkmpp-build 下动辄数 GB，
+	# 直接留在 rootfs 里会被打进镜像（烧卡后 /root 一堆垃圾，还白占 SD 卡空间）。
+	# 已 dpkg -i 进 /usr/local 的栈不受影响：删的只是编译目录，不是安装结果。
+	# /root/debs 是 RKMPP_MPV_PACK_DEB=yes 时要取出的交付物，此时保留。
+	display_alert "Cleaning rkmpp build residue from image rootfs" "${EXTENSION}" "info"
+	# rm -rf 前先确认 SDCARD 是非空绝对路径：变量若被上游意外置空，
+	# "${SDCARD}/root/..." 会退化成 "/root/..."，那就是删构建机的家目录。
+	if [[ -z "${SDCARD:-}" || "${SDCARD}" != /* || ! -d "${SDCARD}/root" ]]; then
+		display_alert "SDCARD 异常（'${SDCARD:-<空>}'），跳过残留清理" "${EXTENSION}" "warn"
+	else
+		rm -rf "${SDCARD}/root/rkmpp-build" "${SDCARD}/root/rkmpp-src"
+		[[ "${RKMPP_MPV_PACK_DEB:-no}" == "yes" ]] || rm -rf "${SDCARD}/root/debs"
+	fi
+
 	# ---- 4. 安全网：确保 CMA=512M 写入 armbianEnv.txt（旧扩展缺失此项 → 4K 掉帧）----
 	# v3 脚本已在 chroot 内写 /boot/armbianEnv.txt；此处兜底（防 boot 分区未挂载时序）。
+	# ⚠️ 语义必须与 chroot 内的写法和板端 set-cma.sh 一致：cma 是 **extraboardargs 这个键**
+	#   的值，不是独立行。旧写法 `grep -q 'cma='` 全文匹配（注释行、extraargs= 里的 cma
+	#   都算命中）+ `sed -i '1i extraboardargs=cma=512M'` 无条件前插 —— Armbian 出厂
+	#   armbianEnv.txt 常常已经有一行 extraboardargs=，于是同名键出现两行，boot 脚本按
+	#   最后一次取值：要么 cma 根本没生效，要么把板级原有参数吃掉，两种都静默出错。
 	if [[ -f "${SDCARD}/boot/armbianEnv.txt" ]]; then
-		if grep -q 'cma=' "${SDCARD}/boot/armbianEnv.txt"; then
-			sed -i -E 's/(cma=)[0-9]+M/\1512M/' "${SDCARD}/boot/armbianEnv.txt"
-		else
-			sed -i '1i extraboardargs=cma=512M' "${SDCARD}/boot/armbianEnv.txt"
-		fi
-		display_alert "Ensured cma=512M in armbianEnv.txt" "${EXTENSION}" "info"
+		_rkmpp_mpv__merge_cma "${SDCARD}/boot/armbianEnv.txt" 512M
 	fi
 
 	# ---- 5. 桌面会话适配：X11 强制 / Wayland 不强制 ----

@@ -79,10 +79,12 @@ _default_user_groups() {
 	printf '%s' "${DEFAULT_USER_GROUPS:-sudo,adm,audio,video,plugdev,netdev,render,input,dialout,cdrom}"
 }
 
-# 本扩展是否启用：不设用户名即整体跳过
+# 本扩展是否启用：用户名与 root 密码都没给才整体跳过。
+# 只给 root 密码（不给用户名）是合法组合 —— CI 的 root_password 输入与此一致，
+# 否则「留空用户名、只想改 root 口令」会静默什么都没做。
 _default_user_enabled() {
 	_default_user_load_file
-	[[ -n "${DEFAULT_USER_NAME:-}" ]]
+	[[ -n "${DEFAULT_USER_NAME:-}" || -n "${DEFAULT_ROOT_PASSWORD:-}" ]]
 }
 
 # 输入校验：非法输入直接中止构建（比起交付一个「没建出用户」的镜像要好）
@@ -91,29 +93,35 @@ _default_user_validate() {
 	_default_user_load_file
 	local err=0
 
-	if ! [[ "${DEFAULT_USER_NAME}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
-		display_alert "DEFAULT_USER_NAME 非法" "'${DEFAULT_USER_NAME}'（要求 ^[a-z_][a-z0-9_-]{0,31}$）" "err"
-		err=1
-	fi
-	if [[ "${DEFAULT_USER_NAME}" =~ ^(root|daemon|bin|sys|nobody|admin)$ ]]; then
-		display_alert "DEFAULT_USER_NAME 不可用" "'${DEFAULT_USER_NAME}' 是系统保留名" "err"
-		err=1
-	fi
-	if [[ -z "${DEFAULT_USER_PASSWORD:-}" ]]; then
-		display_alert "DEFAULT_USER_PASSWORD 为空" "必须提供用户密码" "err"
-		err=1
-	elif ! [[ "${DEFAULT_USER_PASSWORD}" =~ ^[A-Za-z0-9._+#=:@%-]{4,64}$ ]]; then
-		display_alert "DEFAULT_USER_PASSWORD 字符集受限" \
-			"只允许 A-Z a-z 0-9 . _ + # = : @ % -（4~64 位）；含空格/引号/\$ 的密码会污染 compile.sh 参数，请改用上述字符" "err"
-		err=1
+	# 用户名留空 = 本次只处理 root 口令，用户相关的校验整组跳过
+	if [[ -n "${DEFAULT_USER_NAME:-}" ]]; then
+		if ! [[ "${DEFAULT_USER_NAME}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+			display_alert "DEFAULT_USER_NAME 非法" "'${DEFAULT_USER_NAME}'（要求 ^[a-z_][a-z0-9_-]{0,31}$）" "err"
+			err=1
+		fi
+		if [[ "${DEFAULT_USER_NAME}" =~ ^(root|daemon|bin|sys|nobody|admin)$ ]]; then
+			display_alert "DEFAULT_USER_NAME 不可用" "'${DEFAULT_USER_NAME}' 是系统保留名" "err"
+			err=1
+		fi
+		if [[ -z "${DEFAULT_USER_PASSWORD:-}" ]]; then
+			display_alert "DEFAULT_USER_PASSWORD 为空" "必须提供用户密码" "err"
+			err=1
+		elif ! [[ "${DEFAULT_USER_PASSWORD}" =~ ^[A-Za-z0-9._+#=:@%-]{4,64}$ ]]; then
+			display_alert "DEFAULT_USER_PASSWORD 字符集受限" \
+				"只允许 A-Z a-z 0-9 . _ + # = : @ % -（4~64 位）；含空格/引号/\$ 的密码会污染 compile.sh 参数，请改用上述字符" "err"
+			err=1
+		fi
+		if [[ -n "${DEFAULT_USER_GROUPS:-}" ]] && ! [[ "${DEFAULT_USER_GROUPS}" =~ ^[A-Za-z0-9_,]*$ ]]; then
+			display_alert "DEFAULT_USER_GROUPS 非法" "'${DEFAULT_USER_GROUPS}'（只允许字母数字下划线与逗号）" "err"
+			err=1
+		fi
+	else
+		display_alert "Extension: ${EXTENSION}" \
+			"DEFAULT_USER_NAME 未设置：本次仅设置 root 密码，不创建普通用户" "info"
 	fi
 	if [[ -n "${DEFAULT_ROOT_PASSWORD:-}" ]] \
 		&& ! [[ "${DEFAULT_ROOT_PASSWORD}" =~ ^[A-Za-z0-9._+#=:@%-]{4,64}$ ]]; then
 		display_alert "DEFAULT_ROOT_PASSWORD 字符集受限" "同用户密码规则" "err"
-		err=1
-	fi
-	if [[ -n "${DEFAULT_USER_GROUPS:-}" ]] && ! [[ "${DEFAULT_USER_GROUPS}" =~ ^[A-Za-z0-9_,]*$ ]]; then
-		display_alert "DEFAULT_USER_GROUPS 非法" "'${DEFAULT_USER_GROUPS}'（只允许字母数字下划线与逗号）" "err"
 		err=1
 	fi
 	case "${DEFAULT_DESKTOP_SESSION_TYPE:-auto}" in
@@ -124,18 +132,32 @@ _default_user_validate() {
 			err=1
 			;;
 	esac
+	# ⚠️ DEFAULT_USER_SHELL 过去不在校验清单里，却和其它变量一样被单引号拼进
+	# chroot 命令行（DSHELL='${DEFAULT_USER_SHELL:-/bin/bash}'）。
+	# 一个 ' 就能逃出引号、在 chroot 内以 root 执行任意命令 —— 这里补上。
+	if [[ -n "${DEFAULT_USER_SHELL:-}" ]] && ! [[ "${DEFAULT_USER_SHELL}" =~ ^/[A-Za-z0-9._/-]{1,63}$ ]]; then
+		display_alert "DEFAULT_USER_SHELL 非法" \
+			"'${DEFAULT_USER_SHELL}'（必须是绝对路径，只允许字母数字与 . _ / -；含空格或引号的登录 shell 不接受）" "err"
+		err=1
+	fi
 
 	[[ ${err} -eq 0 ]] || exit 1
 }
 
 function extension_prepare_config__default_user() {
 	if ! _default_user_enabled; then
-		display_alert "Extension: ${EXTENSION}" "DEFAULT_USER_NAME 未设置，跳过（不创建默认用户）" "info"
+		display_alert "Extension: ${EXTENSION}" \
+			"DEFAULT_USER_NAME 与 DEFAULT_ROOT_PASSWORD 均未设置，跳过（零副作用）" "info"
 		return 0
 	fi
 	_default_user_validate
+	# ⚠️ 这里只打印「有没有设」，绝不打印口令本身。
+	# 用 ${VAR:+已设置}${VAR:-未设置} 这种写法看似对称，后半段在变量**有值时**
+	# 会把口令原文展开进日志（display_alert 走的是未掩码的构建日志通道）。
+	local _root_pw_state="未设置"
+	[[ -n "${DEFAULT_ROOT_PASSWORD:-}" ]] && _root_pw_state="已设置"
 	display_alert "Extension: ${EXTENSION}" \
-		"默认用户 ${DEFAULT_USER_NAME}（自动登录=${DEFAULT_DESKTOP_AUTOLOGIN:-no} 会话=${DEFAULT_DESKTOP_SESSION_TYPE:-auto} sudo免密=${DEFAULT_SUDO_NOPASSWD:-no}）" "info"
+		"默认用户=${DEFAULT_USER_NAME:-<不创建>}（自动登录=${DEFAULT_DESKTOP_AUTOLOGIN:-no} 会话=${DEFAULT_DESKTOP_SESSION_TYPE:-auto} sudo免密=${DEFAULT_SUDO_NOPASSWD:-no}）root 密码=${_root_pw_state}" "info"
 	return 0
 }
 
@@ -150,7 +172,8 @@ set -u
 
 log() { echo "[default-user] $*"; }
 
-DUSER="${DUSER:?missing DUSER}"
+# 用户名允许为空：CI 的 root_password 单独填写 = 只想改 root 口令，不建普通用户
+: "${DUSER:=}"
 DMODE="${DMODE:-user}"
 
 # ---------------------------------------------------------------- INI 写值
@@ -195,6 +218,24 @@ setup_user() {
 	DNOPASSWD="${DNOPASSWD:-no}"
 	[ -x "$DSHELL" ] || DSHELL=/bin/bash
 
+	# root 口令与「有没有普通用户」无关，先处理：user_name 留空、只填 root_password
+	# 的用法（CI 的两个定制版都支持）过去走不到这一行，口令静默不生效。
+	if [ -n "${DPASS_ROOT:-}" ]; then
+		if echo "root:${DPASS_ROOT}" | chpasswd 2>/dev/null; then
+			log "root 密码已设置"
+		else
+			log "警告: root 密码设置失败"
+		fi
+	fi
+
+	# 没有用户名就到此为止。尤其**不能**往下清首启向导标记 ——
+	# 镜像里没有普通用户时，/root/.not_logged_in_yet 必须留着让 armbian-firstlogin 跑。
+	if [ -z "$DUSER" ]; then
+		log "未提供用户名：跳过建用户/附加组/sudo/首启标记清理（仅处理 root 口令）"
+		log "user setup done"
+		return 0
+	fi
+
 	# 只保留 rootfs 里真实存在的组（不同发行版组名不一致，缺组不能导致 useradd 失败）
 	glist=""
 	for g in $(printf '%s' "$DGROUPS" | tr ',' ' '); do
@@ -232,13 +273,6 @@ setup_user() {
 		log "用户密码已设置"
 	else
 		log "警告: 用户密码设置失败"
-	fi
-	if [ -n "${DPASS_ROOT:-}" ]; then
-		if echo "root:${DPASS_ROOT}" | chpasswd 2>/dev/null; then
-			log "root 密码已设置"
-		else
-			log "警告: root 密码设置失败"
-		fi
 	fi
 
 	# sudo 免密（写完立刻语法校验，不合格就删掉，绝不留下坏 sudoers）
@@ -278,6 +312,11 @@ pick_session() {
 }
 
 setup_autologin() {
+	# 自动登录的对象必须是那个普通用户；只设 root 口令时没有任何可自动登录的用户。
+	if [ -z "$DUSER" ]; then
+		log "未提供用户名：跳过自动登录配置"
+		return 0
+	fi
 	DSESSION_TYPE="${DSESSION_TYPE:-auto}"
 	if [ "$DSESSION_TYPE" = "auto" ]; then
 		case "${DESKTOP_ENV:-}" in
@@ -386,20 +425,24 @@ function post_family_tweaks__default_user() {
 
 	_default_user_stage_script
 
-	display_alert "Extension: ${EXTENSION}" "在 chroot 内创建默认用户 ${DEFAULT_USER_NAME}" "info"
+	display_alert "Extension: ${EXTENSION}" \
+		"在 chroot 内${DEFAULT_USER_NAME:+创建默认用户 ${DEFAULT_USER_NAME}}${DEFAULT_USER_NAME:-仅设置 root 口令}" "info"
 	# 变量全部经 env 传入（已白名单校验，无空格/引号），不做 shell 拼接
 	if ! chroot_sdcard "env \
 		DMODE=user \
-		DUSER='${DEFAULT_USER_NAME}' \
-		DPASS='${DEFAULT_USER_PASSWORD}' \
+		DUSER='${DEFAULT_USER_NAME:-}' \
+		DPASS='${DEFAULT_USER_PASSWORD:-}' \
 		DPASS_ROOT='${DEFAULT_ROOT_PASSWORD:-}' \
 		DGROUPS='$(_default_user_groups)' \
 		DSHELL='${DEFAULT_USER_SHELL:-/bin/bash}' \
 		DNOPASSWD='${DEFAULT_SUDO_NOPASSWD:-no}' \
 		bash /tmp/.armbian-default-user.sh"; then
-		display_alert "Extension: ${EXTENSION}" "默认用户创建失败（chroot 返回非零），镜像内可能无 ${DEFAULT_USER_NAME}" "err"
+		display_alert "Extension: ${EXTENSION}" "默认用户/root 口令设置失败（chroot 返回非零）" "err"
 		return 1
 	fi
+
+	# 只给 root 口令时没有普通用户，用户侧的标记与家目录兜底都不写
+	[[ -n "${DEFAULT_USER_NAME:-}" ]] || return 0
 
 	# 留下只读标记（**不含密码**），供体检脚本/现场核对
 	cat > "${SDCARD}/etc/default-user.conf" <<-EOF

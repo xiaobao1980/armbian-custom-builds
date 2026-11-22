@@ -36,7 +36,9 @@ MPV_PATCH="${MPV_PATCH:-/home/xiaobao/rkmpp-src/mpp.patch}"
 MPV_TAG=v0.41.0
 FFMPEG_LIBDIR=/usr/local/lib/ffmpeg-rkmpp
 LOG="$BUILD_BASE/build.log"
-VIDEO_DIR=/home/xiaobao/Videos
+# 冒烟片所在目录（缺文件只跳过播放验证）。必须用 ${VAR:-} 而不是裸赋值，
+# 否则扩展 chroot 调用里 env VIDEO_DIR=/root 会被这行覆盖回开发机路径，验证永远跳过。
+VIDEO_DIR="${VIDEO_DIR:-/home/xiaobao/Videos}"
 # 并行度：默认 nproc，可用 JOBS 覆盖。ffmpeg 单个编译单元峰值可达数百 MB，
 # 3.9G 内存的板子用 -j8 会 OOM（CI/qemu 同理），降 JOBS 是唯一安全的旋钮。
 JOBS="${JOBS:-$(nproc)}"
@@ -539,13 +541,40 @@ EOF
   udevadm trigger 2>/dev/null || true
   echo 1000 > /proc/mpp_service/load_interval 2>/dev/null || true
   # CMA 512M（4K 流畅前提；重刷默认 256M 会卡）
+  #
+  # ⚠️ 语义与运行时脚本 set-cma.sh 保持一致：cma 一律【合并进已有的 extraboardargs 行】。
+  #   旧实现先 grep 整个文件的 'cma='（连注释行、extraargs= 里的 cma 都算命中），
+  #   没命中就 `sed '1i extraboardargs=cma=512M'` 无条件前插 —— 而 Armbian 出厂
+  #   armbianEnv.txt 往往已经有一行 extraboardargs=（哪怕为空，或带着其它参数），
+  #   于是文件里出现【两个同名键】。boot 脚本按最后一次取值：前插的那条要么被吃掉
+  #   （CMA 根本没生效），要么把原有参数吃掉，两种都静默出错。
   if [ -f /boot/armbianEnv.txt ]; then
-    if grep -q 'cma=' /boot/armbianEnv.txt; then
-      sed -i -E 's/(cma=)[0-9]+M/\1512M/' /boot/armbianEnv.txt
+    _cma_want="512M"
+    _cma_old="$(grep -E '^extraboardargs=' /boot/armbianEnv.txt 2>/dev/null | tail -1 | sed 's/^extraboardargs=//')"
+    if printf '%s' "${_cma_old}" | grep -qE "cma=${_cma_want}"; then
+      log "extraboardargs 已含 cma=${_cma_want}，无需改动"
     else
-      sed -i '1i extraboardargs=cma=512M' /boot/armbianEnv.txt
+      if [ -n "${_cma_old}" ]; then
+        if printf '%s' "${_cma_old}" | grep -qE 'cma=[0-9]+M'; then
+          _cma_new="$(printf '%s' "${_cma_old}" | sed -E "s/cma=[0-9]+M/cma=${_cma_want}/")"
+        else
+          _cma_new="${_cma_old} cma=${_cma_want}"
+        fi
+      else
+        _cma_new="cma=${_cma_want}"
+      fi
+      if grep -qE '^extraboardargs=' /boot/armbianEnv.txt; then
+        _cma_tmp="$(mktemp)"
+        # 值经 ENVIRON 传给 awk，不拼进 sed 替换式：_cma_new 来自文件本身，
+        # 里面的 & 或 | 会被 sed 当特殊记号，反而把启动参数改坏。
+        CMA_LINE="extraboardargs=${_cma_new}" awk '{ if ($0 ~ /^extraboardargs=/) print ENVIRON["CMA_LINE"]; else print }' /boot/armbianEnv.txt > "${_cma_tmp}"
+        cat "${_cma_tmp}" > /boot/armbianEnv.txt; rm -f "${_cma_tmp}"
+      else
+        printf 'extraboardargs=%s\n' "${_cma_new}" >> /boot/armbianEnv.txt
+      fi
+      log "已写入 extraboardargs=${_cma_new}（需 reboot 生效）"
     fi
-    log "已设置 cma=512M（需 reboot 生效）"
+    unset _cma_want _cma_old _cma_new _cma_tmp
   else
     log "未找到 /boot/armbianEnv.txt，跳过 CMA 设置"
   fi

@@ -30,12 +30,18 @@ M=""
 MODE=""
 
 # ---- 1) 优先读布局脚本算好的矩阵 ----
+# 矩阵文件归图形会话用户可写，对以 root 运行的本脚本而言是【不可信输入】：它会原样
+# 拼进 root 写的 udev 规则并被 udevd 解析，所以只接受「恰好 6 段、每段只有数字/小数点/
+# 负号」的矩阵。其余一律整份弃用、回退按屏数自动计算，从而同时挡住两类利用：
+#   ① 掺入 `", RUN+="/evil.sh"` 之类的 udev 语法 → 借 udevd 拿到 root；
+#   ② 把该路径软链到 /etc/shadow 等 root 可读文件 → 内容被写进全局可读的规则文件里泄露。
 if [ -r "$MTXFILE" ]; then
-    M=$(tr -d '\r\n' < "$MTXFILE" | tr -s ' ' | sed 's/^ *//;s/ *$//')
-    case "$M" in
-        *[0-9]*" "*[0-9]*) MODE="from layout script" ;;
-        *) M="" ;;
-    esac
+    M=$(tr '\r\n\t' ' ' < "$MTXFILE" | tr -s ' ' | sed 's/^ *//;s/ *$//')
+    if [[ "$M" =~ ^-?[0-9]+([.][0-9]+)?([[:space:]]+-?[0-9]+([.][0-9]+)?){5}$ ]]; then
+        MODE="from layout script"
+    else
+        M=""
+    fi
 fi
 
 # ---- 2) 退化：按 connected 数量 ----

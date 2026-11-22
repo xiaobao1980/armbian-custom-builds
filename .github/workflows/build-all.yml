@@ -48,19 +48,40 @@ jobs:
       boards: ${{ steps.gen.outputs.boards }}
     steps:
       - id: gen
+        env:
+          IN_BOARDS: ${{ inputs.boards }}
         run: |
-          ALL='["aio-3288c","h96s","am60-sa12","neardi-lz200"]'
-          IN="${{ inputs.boards }}"
-          if [ -n "$IN" ]; then
-            echo "boards=$(echo "$IN" | tr ',' '\n' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          ALL_LIST="aio-3288c h96s am60-sa12 neardi-lz200"
+          # inputs.boards 是自由文本：既不能原样插进 run:（脚本注入），也不校验就
+          # 喂给 matrix（下游拿它拼 boards/<x>/build.env 路径）。这里一次收口：
+          # 拆逗号 → trim 空格（"h96s, neardi-lz200" 以前会产出带前导空格的非法名）
+          # → 比对白名单，未知板卡直接失败，绝不进入 matrix。
+          SELECTED=""
+          if [ -z "${IN_BOARDS//[[:space:]]/}" ]; then
+            SELECTED="$ALL_LIST"
           else
-            echo "boards=$ALL" >> "$GITHUB_OUTPUT"
+            IFS=',' read -r -a PARTS <<< "${IN_BOARDS}" || true
+            for p in "${PARTS[@]}"; do
+              p="$(printf '%s' "$p" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              [ -n "$p" ] || continue
+              case " ${ALL_LIST} " in
+                *" ${p} "*) SELECTED="${SELECTED} ${p}" ;;
+                *) echo "::error::未知板卡 '${p}'。可选：${ALL_LIST}"; exit 1 ;;
+              esac
+            done
           fi
+          [ -n "${SELECTED// /}" ] || { echo "::error::筛选后没有任何板卡参与构建"; exit 1; }
+          BOARDS_JSON="$(printf '%s\n' ${SELECTED} | awk 'NF && !seen[$0]++' | jq -R . | jq -sc .)"
+          echo "boards=${BOARDS_JSON}" >> "$GITHUB_OUTPUT"
+          echo "参与构建:${SELECTED}"
 
   build:
     needs: matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    # 340 而不是 360: GitHub job 硬上限就是 360 分钟，撞到它会被杀在
+    # artifact / 日志上传中途（产物丢失、Release 半截）。留 20 分钟给收尾。
+    timeout-minutes: 340
     permissions:
       contents: write    # 发布 Release 需要
     strategy:
@@ -97,12 +118,18 @@ jobs:
           echo "--- binfmt_misc 已注册:"; ls /proc/sys/fs/binfmt_misc/
 
       - name: Clone armbian/build (${{ inputs.build_ref }})
+        env:
+          BUILD_REF: ${{ inputs.build_ref }}
         run: |
-          git clone --depth=1 --branch "${{ inputs.build_ref }}" \
+          set -euo pipefail
+          [ -n "${BUILD_REF}" ] || { echo "::error::build_ref 为空"; exit 1; }
+          git clone --depth=1 --branch "${BUILD_REF}" \
             https://github.com/armbian/build armbian-build
 
       - name: 同步板卡自定义文件
-        run: bash scripts/sync-board-to-build.sh "${{ matrix.board }}" armbian-build
+        env:
+          IN_BOARD: ${{ matrix.board }}
+        run: bash scripts/sync-board-to-build.sh "${IN_BOARD}" armbian-build
 
       - name: 计算构件缓存键 (kernel/u-boot 与 rootfs 分离)
         id: cache-key
@@ -183,13 +210,15 @@ jobs:
 
       - name: "全新编译模式: 清空历史 kernel/u-boot debs"
         if: ${{ inputs.kernel_uboot_mode != 'reuse' }}
+        env:
+          MODE: ${{ inputs.kernel_uboot_mode }}
         run: |
           set -euo pipefail
           mkdir -p armbian-build/output/debs
           n=$(find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f | wc -l)
           find armbian-build/output/debs -mindepth 1 -maxdepth 2 -type f -delete
           echo "::notice::已跳过历史 debs 缓存并清空 ${n} 个文件, kernel/u-boot 将从源码编译"
-          if [ "${{ inputs.kernel_uboot_mode }}" = "fresh-strict" ]; then
+          if [ "${MODE}" = "fresh-strict" ]; then
             echo "::notice::fresh-strict: 额外传 ARTIFACT_IGNORE_CACHE=yes, 连 rootfs 与远程 OCI 缓存也全部禁用 (最慢)"
           else
             echo "::notice::fresh: rootfs 缓存仍复用, 只有 kernel/u-boot 全新编译"
@@ -197,29 +226,70 @@ jobs:
 
       - name: 组装构建参数
         id: args
+        env:
+          IN_BOARD: ${{ matrix.board }}
         run: |
+          set -euo pipefail
+          ENV_FILE="boards/${IN_BOARD}/build.env"
+          # 没有 set -e 时 build.env 缺失只会让 source 打个 "No such file" 就继续，
+          # 于是 ARGS 里全是空值、失败推迟到 compile.sh 深处才炸，日志完全看不出根因。
+          [ -r "${ENV_FILE}" ] || { echo "::error::缺少板卡配置 ${ENV_FILE}"; exit 1; }
           # shellcheck disable=SC1091
-          source "boards/${{ matrix.board }}/build.env"
+          source "${ENV_FILE}"
           ARGS="BOARD=${BOARD} BRANCH=${BRANCH} RELEASE=${RELEASE} BUILD_DESKTOP=${BUILD_DESKTOP} BUILD_MINIMAL=${BUILD_MINIMAL}"
-          if [ -n "${ENABLE_EXTENSIONS:-}" ]; then ARGS="${ARGS} ENABLE_EXTENSIONS=${ENABLE_EXTENSIONS}"; fi
+          EXTS="${ENABLE_EXTENSIONS:-}"
           # BUILD_DESKTOP=yes 必须显式给桌面环境和档位, 否则弹 dialog(无 TTY 直接挂)
           if [ "${BUILD_DESKTOP}" = "yes" ]; then
             if [ -z "${DESKTOP_ENVIRONMENT:-}" ]; then echo "::error::BUILD_DESKTOP=yes 但 DESKTOP_ENVIRONMENT 为空"; exit 1; fi
             ARGS="${ARGS} DESKTOP_ENVIRONMENT=${DESKTOP_ENVIRONMENT}"
-            # 优化: GitHub 6h runner 时限下, 桌面档位强制 base (减 rootfs 装包时间), 覆盖 build.env 里的 mid
-            ARGS="${ARGS} DESKTOP_TIER=base"
+            # 漂移补齐：desktop-dm 自愈扩展（chroot 里装 gdm3 不建
+            # display-manager.service 这个 Alias → 烧卡停在文字控制台）。
+            # X11/Wayland 定制版早就启用，矩阵版漏了，同一块板卡换个 workflow 就复现原缺陷。
+            # 扩展幂等且对非 gdm 桌面（lightdm 自带该链接）零副作用，故桌面向一律追加。
+            case ",${EXTS}," in
+              *,desktop-dm,*) ;;
+              *) EXTS="${EXTS:+${EXTS},}desktop-dm"; echo "已追加公共扩展 desktop-dm (显示管理器单元自愈)" ;;
+            esac
+            # 优化: GitHub 6h runner 时限下, 桌面档位强制 minimal (仅基础桌面, 不含浏览器/媒体),
+            # 覆盖 build.env 里的 mid 以省下 rootfs 装包时间。
+            # ⚠️ mainline 的 DESKTOP_TIER 只接受 minimal|mid|full，**没有 base**：
+            # 历史上这里写 base，Build-All 的三个桌面板卡全部注定失败/弹对话框。
+            ARGS="${ARGS} DESKTOP_TIER=minimal"
           fi
+          if [ -n "${EXTS}" ]; then ARGS="${ARGS} ENABLE_EXTENSIONS=${EXTS}"; fi
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          echo "release=${RELEASE}" >> "$GITHUB_OUTPUT"
+          echo "extensions=${EXTS}" >> "$GITHUB_OUTPUT"
           echo "构建参数: ${ARGS}"
+
+      # 必须排在 args 之后：预编译包只对「编译它的发行版」有效（扩展会比对包内
+      # DISTRO_CODENAME 与本次 RELEASE，不匹配即回退源码编译 → 撞 6h 上限），
+      # 所以选包要用解析后的 RELEASE，而不是各自拍脑袋猜 noble。
+      - name: 预拉 rkmpp-stack 预编译包 (避免 CI 6h 上限内编不完)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          IN_RELEASE: ${{ steps.args.outputs.release }}
+          IN_EXTS: ${{ steps.args.outputs.extensions }}
+        run: |
+          case ",${IN_EXTS}," in
+            *,rkmpp-mpv,*) ;;
+            *) echo "未启用 rkmpp-mpv（extensions='${IN_EXTS}'），跳过预编译包拉取"; exit 0 ;;
+          esac
+          bash scripts/fetch-prebuilt-rkmpp.sh "${IN_RELEASE}"
 
       - name: 编译镜像
         env:
           RK_STRICT_ARGS: ${{ inputs.kernel_uboot_mode == 'fresh-strict' && 'ARTIFACT_IGNORE_CACHE=yes' || '' }}
+          BUILD_ARGS: ${{ steps.args.outputs.args }}
+        # 编译步骤单独限时 320 分钟：留出 ~20 分钟给构件检查、产物上传与日志上传，
+        # 否则 job 级 340 分钟一响，几小时编译的成果可能卡在上传中途全丢。
+        timeout-minutes: 320
         run: |
           cd armbian-build
           # main 分支 CLI 参数顺序任意, 保持 KEY=VALUE 在前更可读
           ./compile.sh \
-            ${{ steps.args.outputs.args }} \
+            ${BUILD_ARGS} \
             KERNEL_CONFIGURE=no \
             KERNEL_BTF=no \
             EXPERT=yes \
@@ -270,6 +340,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BOARD_NAME: ${{ matrix.board }}
           BUILD_ARGS: ${{ steps.args.outputs.args }}
+          BUILD_REF: ${{ inputs.build_ref }}
         run: |
           set -euo pipefail
           # 版本保留: tag 带 run 号, 每次构建独立 Release, 所有版本镜像都保留
@@ -304,7 +375,7 @@ jobs:
           |---|---|
           | 板卡 | ${BOARD_NAME} |
           | 构建参数 | \`${BUILD_ARGS}\` |
-          | armbian/build 引用 | ${{ inputs.build_ref }} |
+          | armbian/build 引用 | ${BUILD_REF} |
           | 构建时间 (UTC) | $(date -u '+%Y-%m-%d %H:%M') |
 
           ### 烧写
