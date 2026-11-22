@@ -130,7 +130,8 @@ EOF
 
 # ---- 3. dpkg-shlibdeps 计算运行库依赖（用 live 二进制，系统 ldconfig 可见隔离库）----
 # --ignore-missing-info: 我们自己编的 libav*/librga/librockchip_mpp 无 dpkg 归属，
-# 不忽略会直接报错；忽略后只保留系统级依赖，与已验证 deb 的 Depends 一致。
+# 不忽略会直接报错；忽略后只保留系统级依赖。
+# ⚠️ 「无 dpkg 归属」只在打包机没装过同名库时成立 —— 见 3.5 的过滤。
 cat > "$WORK/debian/control" <<EOF
 Source: $PKG
 Section: video
@@ -170,7 +171,31 @@ if [ -z "$DEPS" ]; then
   echo "--- dpkg-shlibdeps stderr ---"; sed -n '1,20p' "$WORK/shlibdeps.err" >&2 || true
   die "Depends 计算失败（shlibdeps 为空）"
 fi
-log "Depends: $DEPS"
+# ---- 3.5 剔除「包内自带库」被记账成外部依赖的条目 ----
+# dpkg-shlibdeps 是拿 SONAME 去打包机的 ldconfig 归属表里查包名的。本包自带
+# librockchip_mpp/librockchip_vpu（$PREFIX/lib）与 librga（$PREFIX/lib/$MULTIARCH），
+# 可只要打包机上恰好装过 rockchip-multimedia PPA 的同名 soname 库
+# （/usr/lib/$MULTIARCH/librockchip_mpp.so.1），这条依赖就被记到 PPA 包头上了。
+# rkmpp-stack_0.41.0-1_arm64.deb(noble) 正是如此：Depends 里有 librockchip-mpp1，
+# 而镜像里没配那个 PPA 时 apt 直接判「not installable」，整条预编译路径退化成源码编译
+# （run 45002511595 实测：09:00 装包失败 → 白烧 3 小时）。同一套代码在没装过 PPA 的机器上
+# 打包（trixie 的 0.41.0-2）Depends 里就没有它 —— 依赖随打包机状态漂移，本就不能要。
+# 运行期由包内自带的 .so + /etc/ld.so.conf.d 满足，不需要任何 PPA 包。
+# 注意 pipefail：grep -v 全滤掉时退 1，裸赋值即中止脚本，故逐条 `|| true`。
+SELF_SHIPPED_RE='^(librockchip-mpp1|librockchip-vpu0|librga2)([ (]|$)'
+DEPS_RAW="$DEPS"
+DEPS="$(printf '%s\n' "$DEPS_RAW" | tr ',' '\n' | sed 's/^[[:space:]]*//' \
+          | grep -vE "$SELF_SHIPPED_RE" | paste -sd ',' - | sed 's/,/, /g' || true)"
+# 极端输入（一条不剩）时退回原值：宁可依赖偏严，也不产出 Depends 为空的怪包。
+[ -n "$DEPS" ] || DEPS="$DEPS_RAW"
+_dropped="$(printf '%s\n' "$DEPS_RAW" | tr ',' '\n' | sed 's/^[[:space:]]*//' \
+             | grep -E "$SELF_SHIPPED_RE" | paste -sd ',' - | sed 's/,/, /g' || true)"
+if [ -n "$_dropped" ]; then
+  log "剔除包内自带库的记账依赖: $_dropped"
+  log "Depends: $DEPS"
+else
+  log "Depends: $DEPS（无包内自带库的记账依赖）"
+fi
 
 # ---- 4. DEBIAN 控制文件 ----
 mkdir -p "$STAGE/DEBIAN"

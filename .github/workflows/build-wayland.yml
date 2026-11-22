@@ -8,6 +8,10 @@ name: Build Armbian Image (Wayland 定制版)
 #    · 网页硬解走 chromium-rkmpp（rockchip-multimedia PPA + pin1002 + chromium 132/126+rkmpp）。
 #      ⚠️ 该 PPA 只发布 jammy / noble —— 其余发行版（trixie/bookworm/resolute/forky）
 #      该扩展会自动跳过、镜像里没有网页硬解；默认放行（allow_no_hwdec=true）以便出纯桌面/中文镜像。
+#      ⚠️ 该 PPA 同时是 librockchip-mpp1 在 Ubuntu 上的**唯一来源**（官方 noble/jammy 各 pocket
+#      都不发布，configng 也不给），而预编译 rkmpp-stack.deb 的 Depends 里就有它 —— 所以
+#      rkmpp-mpv 装预编译包前会自己确保源就位（见 common/extensions/rkmpp-mpv.sh 的
+#      _rkmpp_mpv__ensure_mpp_ppa），否则 apt 判 not installable、白烧 3 小时回退源码编译。
 #    · mesa 运行时 / panthor-gpu overlay / PPA 基础多媒体包由 armbian 主线的
 #      armbian-configng module_desktops 在 rootfs 装配期完成（上游 2026-05-09 已把
 #      旧 extensions/mesa-vpu.sh 的这部分职责迁过去并删除该扩展）；本仓只补它没做的

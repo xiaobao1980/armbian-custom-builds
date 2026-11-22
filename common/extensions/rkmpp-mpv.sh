@@ -138,6 +138,33 @@ function _rkmpp_mpv__merge_cma() {
 	return 0
 }
 
+# ---- 预编译 deb 的 librockchip-mpp1：jammy/noble 上必须先有 rockchip-multimedia PPA ----
+# ⚠️ librockchip-mpp1 在 Ubuntu 上的**唯一来源**就是 ppa:liujianfeng1994/rockchip-multimedia
+#   （与 chromium-rkmpp 同一个 PPA）：Ubuntu 官方 noble/jammy 的 main/universe/multiverse
+#   都不发布它（packages.ubuntu.com/noble/librockchip-mpp1 → "No such package."，
+#   Launchpad 的 noble/arm64 publishing history 为空），armbian configng 也不提供。
+#   而扩展顺序里 rkmpp-mpv 在 chromium-rkmpp 之前，轮到本函数时源表里还没有 PPA，
+#   apt 于是判「rkmpp-stack : Depends: librockchip-mpp1 but it is not installable」，
+#   整条预编译快路径退化成源码编译（run 45002511595：09:00:24 失败 → 白烧 3 小时）。
+#   这里只负责「源在、依赖可解」；pin 与装包仍归 chromium-rkmpp，两边判据一致不会重复加。
+#   Debian（trixie/bookworm/…）没有这个 PPA，其预编译包 Depends 里也没这条记账 → 跳过。
+#   📌 已知副作用（有意接受）：PPA 的 librockchip_mpp.so.1 落在 /usr/lib/<multiarch>，
+#   ld.so 路径优先级高于包自带的 /usr/local/lib 那份，桌面镜像运行时仍用 PPA 版 mpp。
+function _rkmpp_mpv__ensure_mpp_ppa() {
+	[[ "${RELEASE:-}" =~ ^(jammy|noble)$ ]] || return 0
+	if compgen -G "${SDCARD}/etc/apt/sources.list.d/*liujianfeng1994*rockchip*" >/dev/null 2>&1 ||
+		grep -qs "liujianfeng1994/rockchip-multimedia" "${SDCARD}/etc/apt/sources.list" 2>/dev/null; then
+		display_alert "Extension: ${EXTENSION}" "rockchip-multimedia PPA 已在源里，复用（librockchip-mpp1 可解）" "info"
+		return 0
+	fi
+	if do_with_retries 3 chroot_sdcard add-apt-repository ppa:liujianfeng1994/rockchip-multimedia --yes --no-update; then
+		display_alert "Extension: ${EXTENSION}" "为预编译 rkmpp-stack 的 librockchip-mpp1 补加 rockchip-multimedia PPA" "info"
+		return 0
+	fi
+	display_alert "Extension: ${EXTENSION}" "rockchip-multimedia PPA 加不上：预编译包依赖无解，将回退源码编译" "warn"
+	return 0
+}
+
 function extension_prepare_config__rkmpp_mpv() {
 	# 仅 vendor 内核 + Rockchip rk35xx/rk3588 家族（BSP 内核才带 rkmpp/RGA 驱动）
 	if [[ ! ( "${LINUXFAMILY}" =~ ^(rk35xx|rockchip-rk3588)$ && "${BRANCH}" == "vendor" ) ]]; then
@@ -287,6 +314,7 @@ function post_install_kernel_debs__rkmpp_mpv() {
 
 	if [[ -n "${DEB}" && "${RKMPP_MPV_PREBUILT:-yes}" == "yes" ]]; then
 		display_alert "Installing prebuilt rkmpp-stack deb: $(basename "${DEB}")" "${EXTENSION}" "info"
+		_rkmpp_mpv__ensure_mpp_ppa
 		cp "${DEB}" "${SDCARD}/root/rkmpp-src/"
 		if chroot_sdcard "apt-get update -qq" &&
 			chroot_sdcard "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /root/rkmpp-src/$(basename "${DEB}")"; then

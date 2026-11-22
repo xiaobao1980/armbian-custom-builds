@@ -8,6 +8,10 @@ name: Build Armbian Image (X11 定制版)
 #    · 硬解栈走 rkmpp-mpv（mpv + ffmpeg-rockchip，drm_prime 零拷贝，X11 专用）
 #    · 网页硬解走 chromium-rkmpp（PPA + pin1002 + chromium 132/126+rkmpp；仅 jammy/noble）
 #      两个扩展互不排斥，同时启用即「本地 4K 零拷贝 + 网页视频硬解」同一镜像。
+#      ⚠️ 该 PPA 同时是 librockchip-mpp1 在 Ubuntu 上的**唯一来源**（官方 noble/jammy 各
+#      pocket 都不发布，configng 也不给），而预编译 rkmpp-stack.deb 的 Depends 里就有它 ——
+#      rkmpp-mpv 装预编译包前会自己确保源就位（common/extensions/rkmpp-mpv.sh 的
+#      _rkmpp_mpv__ensure_mpp_ppa），否则 apt 判 not installable、白烧 3 小时回退源码编译。
 #    · 显示管理器按 X11 会话配置（gdm3 → WaylandEnable=false）
 #  可配置：板卡 / 发行版 / 桌面 / 默认用户（用户名·密码·root 密码·附加组·
 #          sudo 免密·桌面自动登录）/ 中文环境 / 压缩格式 / runner / 是否发 Release
