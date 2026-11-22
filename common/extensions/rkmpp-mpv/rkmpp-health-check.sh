@@ -116,6 +116,15 @@ fi
 if [ -r /boot/armbianEnv.txt ]; then
     info "armbianEnv fdtfile: $(sed -n 's/^fdtfile=//p' /boot/armbianEnv.txt | head -1)"
     info "armbianEnv extraboardargs: $(sed -n 's/^extraboardargs=//p' /boot/armbianEnv.txt | head -1)"
+    # CMA 只能有一个来源：boot.cmd 拼 "${extraargs} ${extraboardargs}"，Linux 的 cma= 取
+    # 最后一个。两条并存时「今天是 512M」纯属顺序巧合，模板一变就静默退回 256M。
+    _ea=$(sed -n 's/^extraargs=//p' /boot/armbianEnv.txt | tail -1)
+    [ -n "$_ea" ] && info "armbianEnv extraargs: ${_ea}"
+    _n=$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | grep -c '^cma=' || true)
+    if [ "${_n:-0}" -gt 1 ] 2>/dev/null; then
+        warn "cmdline 有 ${_n} 个 cma=（$(tr ' ' '\n' < /proc/cmdline | grep '^cma=' | paste -sd ' ' -)）" "只有最后一个生效；跑 set-cma.sh --apply 收敛到 extraboardargs 单一来源"
+    fi
+    unset _ea _n
 fi
 
 # ============================ C. 桌面会话 ============================

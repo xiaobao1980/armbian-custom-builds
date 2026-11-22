@@ -549,7 +549,12 @@ EOF
   fi
   # CMA 512M（4K 流畅前提；重刷默认 256M 会卡）
   #
-  # ⚠️ 语义与运行时脚本 set-cma.sh 保持一致：cma 一律【合并进已有的 extraboardargs 行】。
+  # ⚠️ 语义与扩展 rkmpp-mpv.sh、运行时脚本 set-cma.sh 保持一致：
+  #   ① cma 一律【合并进已有的 extraboardargs 行】，且【删掉 extraargs 行里的 cma=】。
+  #      为什么要删 extraargs：rk35xx family 的 config/bootenv/rk35xx.txt 模板自带
+  #      extraargs=cma=256M，boot.cmd 拼的是 "${extraargs} ${extraboardargs}"，而 Linux 的
+  #      cma= 取最后一次出现 —— cmdline 于是挂着 `cma=256M cma=512M`（cm3588-nas 实测），
+  #      生效值全靠拼接顺序，是巧合不是设计，模板一变就静默退回 256M。
   #   旧实现先 grep 整个文件的 'cma='（连注释行、extraargs= 里的 cma 都算命中），
   #   没命中就 `sed '1i extraboardargs=cma=512M'` 无条件前插 —— 而 Armbian 出厂
   #   armbianEnv.txt 往往已经有一行 extraboardargs=（哪怕为空，或带着其它参数），
@@ -557,6 +562,28 @@ EOF
   #   （CMA 根本没生效），要么把原有参数吃掉，两种都静默出错。
   if [ -f /boot/armbianEnv.txt ]; then
     _cma_want="512M"
+    # ① 清 extraargs 的 cma=（逐词删除，同行其它参数原样保留；每条 extraargs 行都处理）。
+    #    以「转换后与原文件比对」判幂等，不做「最后一行有没有 cma」的检测 —— 多行残留会漏。
+    _cma_tmp="$(mktemp)"
+    awk '
+      function drop_cma(line, key,   v, n, i, parts, out) {
+        v = substr(line, length(key) + 2)   # +2 = 跳过 "key=" 本身
+        n = split(v, parts, /[ \t]+/)
+        out = ""
+        for (i = 1; i <= n; i++)
+          if (parts[i] != "" && parts[i] !~ /^cma=/)
+            out = out (out == "" ? "" : " ") parts[i]
+        return key "=" out
+      }
+      /^extraargs=/ { print drop_cma($0, "extraargs"); next }
+      { print }
+    ' /boot/armbianEnv.txt > "${_cma_tmp}"
+    if ! cmp -s "${_cma_tmp}" /boot/armbianEnv.txt; then
+      cat "${_cma_tmp}" > /boot/armbianEnv.txt
+      log "已删除 extraargs 里的 cma=（family 模板自带 256M），CMA 统一由 extraboardargs 提供"
+    fi
+    rm -f "${_cma_tmp}"
+    # ② 合并进 extraboardargs
     # 末尾的 `|| true` 是必需的：armbianEnv.txt 里没有 extraboardargs 行（新板卡的常态）时
     # grep 返回 1，pipefail 传给整条管道，裸赋值语句即失败，set -e 会【一个字节都不输出】
     # 就终止脚本 —— 空值本就是下面 else 分支要的结果。run 44994198934 真实死于此。

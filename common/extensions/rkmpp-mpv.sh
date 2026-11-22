@@ -75,7 +75,9 @@
 #    2. /usr/local/lib/ffmpeg-rkmpp/      —— 隔离的 ffmpeg-rockchip（含 *_rkmpp 解码器）
 #    3. /etc/mpv/mpv.conf                 —— hwdec=rkmpp（零拷贝；缺 egl-x11 的板改 rkmpp-copy）
 #    4. /etc/udev/rules.d/99-mpp.rules    —— mpp_service 0666
-#    5. /boot/armbianEnv.txt              —— extraboardargs=cma=512M（4K 流畅前提，首启即生效）
+#    5. /boot/armbianEnv.txt              —— extraboardargs=cma=512M，并删掉 extraargs 里
+#                                          family 模板自带的 cma=256M（cmdline 只留一个 cma=；
+#                                          4K 流畅前提，首启即生效）
 #    6. 桌面会话强制 X11（gdm3/sddm）+ modesetting TearFree
 # =============================================================================
 
@@ -92,20 +94,61 @@ function _rkmpp_mpv__cannot_build_mpv() {
 	return 1
 }
 
-# 把 cma=<want> 合并进 armbianEnv.txt 的 extraboardargs 键（不新增同名键）。
+# CMA 收敛到 **extraboardargs 一个来源**：写 cma=<want> 进 extraboardargs，并删掉
+# extraargs 键里的 cma=（rk35xx family 的 config/bootenv/rk35xx.txt 模板自带
+# extraargs=cma=256M）。
+# 为什么两条不能并存：boot.cmd 拼的是 "... ${extraargs} ${extraboardargs}"，而 Linux 的
+# cma= **取最后一次出现** —— 镜像里因此挂着 `cma=256M cma=512M`（cm3588-nas 实测 cmdline
+# 即是，dmesg "Reserved 512 MiB"）。生效值 512M 全靠模板的拼接顺序，是巧合不是设计：
+# 顺序或模板一变就静默退回 256M，而现场只能靠开机 cat /proc/cmdline 才发现。
 # 与 chroot 内 rk35xx-rkmpp-mpv-build.sh、板端 /usr/local/sbin/set-cma.sh 三处语义一致 ——
 # 三处写法一旦分叉，最后一次写入者决定实际生效值，排查时只能靠开机后 cat 才发现。
-#   · 已含 cma=<want>            → 不动
+#   · 已含 cma=<want>            → 不动 extraboardargs（extraargs 的清理照做，见上）
 #   · 有 cma=<其它>M             → 就地替换数值，同行其它参数原样保留
 #   · 有 extraboardargs 但无 cma → 追加到该行末尾
 #   · 完全没有 extraboardargs    → 末尾新写一行
 # 出现多行同名键时（历史版本 `sed '1i'` 前插留下的），把它们全部改写成同一个合并结果：
 # boot 脚本按最后一次取值，留下内容不一致的两行等于让生效值取决于行序。
+function _rkmpp_mpv__strip_extraargs_cma() {
+	local f="$1" tmp
+	tmp="$(mktemp)"
+	# 逐词删掉 cma=<值>，同行其它参数原样保留；**所有** extraargs 行一起处理，
+	# 免得「只改最后一行」把上一行的 256M 留在文件里继续参与拼接。
+	# 不做「先检测有没有 cma」的判断：判据只能看最后一行，多行残留时会漏掉前面的，
+	# 而这里幂等性由「转换后与原文件比对」保证 —— 没变化就不回写。
+	awk '
+		function drop_cma(line, key,   v, n, i, parts, out) {
+			v = substr(line, length(key) + 2)   # +2 = 跳过 "key=" 本身
+			n = split(v, parts, /[ \t]+/)
+			out = ""
+			for (i = 1; i <= n; i++)
+				if (parts[i] != "" && parts[i] !~ /^cma=/)
+					out = out (out == "" ? "" : " ") parts[i]
+			return key "=" out
+		}
+		/^extraargs=/ { print drop_cma($0, "extraargs"); next }
+		{ print }
+	' "$f" > "${tmp}"
+	if cmp -s "${tmp}" "$f"; then
+		rm -f "${tmp}"
+		return 1
+	fi
+	cat "${tmp}" > "$f"
+	rm -f "${tmp}"
+	return 0
+}
+
 function _rkmpp_mpv__merge_cma() {
 	local f="$1" want="${2:-512M}" cur new tmp
 	[[ -f "$f" ]] || { display_alert "Extension: ${EXTENSION}" "$f 不存在，跳过 CMA 设置" "warn"; return 0; }
 
-	# 只看 extraboardargs 键自己的值（grep 锚定行首，注释行与其它键一概不算命中）
+	# ① 先清 extraargs 的 cma=（在 extraboardargs 的「已达标就早退」之前，否则老镜像里
+	#    那行 256M 永远没机会被去掉 —— 重复构建也幂等：清过就返回 1、不再动文件）
+	if _rkmpp_mpv__strip_extraargs_cma "$f"; then
+		display_alert "Extension: ${EXTENSION}" "已删除 extraargs 里的 cma=（family 模板自带的 256M），CMA 统一由 extraboardargs 提供" "info"
+	fi
+
+	# ② 再看 extraboardargs 键自己的值（grep 锚定行首，注释行与其它键一概不算命中）
 	cur="$(grep -E '^extraboardargs=' "$f" | tail -1 || true)"
 	cur="${cur#extraboardargs=}"
 

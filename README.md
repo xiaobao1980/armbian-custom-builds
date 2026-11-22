@@ -221,7 +221,8 @@ jammy 自带 libplacebo 4.x < 6.338.2，`rkmpp-mpv` 会直接跳过（否则构�
 
 3. **全局 `/etc/mpv/mpv.conf`**：`hwdec=rkmpp`（显式锁定——`hwdec=auto` 的探测白名单不含 rkmpp，会把它排在最后且随机序；rkmpp 初始化失败时 mpv 自动回退软解）+ `vo=gpu` + `gpu-api=opengl`（X11 渲染基线，Panfrost 无 Vulkan）+ 4K 性能优化（`profile=fast`）；
 4. **全局非 Wayland**：GNOME/gdm3 写 `WaylandEnable=false`，KDE/sddm 写 `DisplayServer=x11`，另加 modesetting `TearFree` 防撕裂（`RKMPP_MPV_SESSION=wayland` 时整步跳过）；
-5. **CMA 512M**（4K 流畅前提，重刷后默认为 256M 会卡）：写进 `/boot/armbianEnv.txt` 的**已有** `extraboardargs=` 行 —— 语义与板端 `set-cma.sh` 一致：已含 `cma=512M` 就不动；含 `cma=<其它>M` 就地替换；没有 `cma` 就追加到该行末尾；一行都没有才新写一行。
+5. **CMA 512M**（4K 流畅前提，重刷后默认为 256M 会卡）：写进 `/boot/armbianEnv.txt` 的**已有** `extraboardargs=` 行 —— 语义与板端 `set-cma.sh` 一致：已含 `cma=512M` 就不动；含 `cma=<其它>M` 就地替换；没有 `cma` 就追加到该行末尾；一行都没有才新写一行。**同时删掉 `extraargs=` 行里 family 模板自带的 `cma=256M`**（同行其它参数原样保留，逐条 `extraargs=` 行都处理）。
+   ⚠️ 为什么两条不能并存：`config/bootscripts/boot-rk35xx.cmd` 拼的是 `${extraargs} ${extraboardargs}`，而 Linux 的 `cma=` **取最后一次出现**。cm3588-nas 实测 cmdline 即 `cma=256M cma=512M`、dmesg `Reserved 512 MiB` —— 生效值全靠模板拼接顺序，是巧合不是设计，顺序或模板一变就静默退回 256M。现在 cmdline 只有 `extraboardargs` 这一个来源。
    ⚠️ 旧实现是「全文 `grep cma=`（连注释行、`extraargs=` 里的都算命中）→ 没命中就 `sed -i '1i extraboardargs=cma=512M'` 无条件前插」，而 Armbian 出厂往往已经有一行 `extraboardargs=`（哪怕为空）→ 文件里出现**两个同名键**，boot 脚本按最后一次取值：前插那条要么被吃掉（CMA 根本没生效），要么把原有参数吃掉，两种都静默出错。
 6. **不留编译残留**：装完删掉镜像里的 `/root/rkmpp-build`（源码树 + 中间对象，数 GB）、`/root/rkmpp-src`（投喂进去的 tarball / `mpp.patch` / deb 副本）和两个一次性脚本；`RKMPP_MPV_PACK_DEB=yes` 时保留 `/root/debs`（那是要在烧卡后取出的交付物）。删之前先确认 `SDCARD` 是非空绝对路径且 `/root` 存在 —— 变量被置空就会变成删构建机的 `~/`。
 

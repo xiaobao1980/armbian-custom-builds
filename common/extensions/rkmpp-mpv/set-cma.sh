@@ -12,7 +12,9 @@
 #   默认（无参数）  只读报告：打印当前 CmaTotal、armbianEnv.txt 现状、是否已设。
 #                   绝不修改任何文件。
 #   --apply         真正写入：仅 Armbian（存在 /boot/armbianEnv.txt）生效；
-#                   幂等合并到已有 extraboardargs（不覆盖其它参数）；写后明确告警需 reboot。
+#                   幂等合并到已有 extraboardargs（不覆盖其它参数），并删掉 extraargs 行里
+#                   模板自带的 cma=（两条并存时 Linux 只认最后一个，生效值取决于拼接顺序）；
+#                   写后明确告警需 reboot。
 #   --check         校验：CmaTotal == 524288 kB(512M) 则 PASS，否则 FAIL。
 #
 # 非 Armbian（无 armbianEnv.txt）：不写任何东西，打印手动指引后退出非 0。
@@ -59,10 +61,51 @@ current_extraboardargs() {
   grep -E '^extraboardargs=' "$ARMBIANENV" 2>/dev/null | tail -1 | sed 's/^extraboardargs=//'
 }
 
+# 解析 armbianEnv.txt 里 extraargs 的当前值（无则空）
+current_extraargs() {
+  [ -r "$ARMBIANENV" ] || { echo ""; return; }
+  grep -E '^extraargs=' "$ARMBIANENV" 2>/dev/null | tail -1 | sed 's/^extraargs=//'
+}
+
+# 删掉 extraargs 行里的 cma=<值>，同行其它参数原样保留；每条 extraargs 行都处理。
+# 为什么必须删：rk35xx family 的 bootenv 模板自带 extraargs=cma=256M，boot.cmd 拼的是
+# "${extraargs} ${extraboardargs}"，而 Linux 的 cma= 取最后一次出现 —— 两条并存时生效值
+# 全靠拼接顺序（cm3588-nas 实测 cmdline 即 `cma=256M cma=512M`）。CMA 只留 extraboardargs
+# 一个来源，语义与扩展 rkmpp-mpv.sh、板端 rk35xx-rkmpp-mpv-build.sh 一致。
+strip_extraargs_cma() {
+  local tmp
+  [ -f "$ARMBIANENV" ] || return 1
+  tmp="$(mktemp)"
+  # 幂等判据用「转换后与原文件比对」，不用「最后一行有没有 cma」：多行 extraargs 时后者会漏
+  awk '
+    function drop_cma(line, key,   v, n, i, parts, out) {
+      v = substr(line, length(key) + 2)   # +2 = 跳过 "key=" 本身
+      n = split(v, parts, /[ \t]+/)
+      out = ""
+      for (i = 1; i <= n; i++)
+        if (parts[i] != "" && parts[i] !~ /^cma=/)
+          out = out (out == "" ? "" : " ") parts[i]
+      return key "=" out
+    }
+    /^extraargs=/ { print drop_cma($0, "extraargs"); next }
+    { print }
+  ' "$ARMBIANENV" > "$tmp"
+  if cmp -s "$tmp" "$ARMBIANENV"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  cat "$tmp" > "$ARMBIANENV"
+  rm -f "$tmp"
+  return 0
+}
+
 # 把 cma=NNN 写进 extraboardargs（幂等合并，不覆盖其它参数）
 # 入参：$1 = 目标 cma 字符串（如 512M）
 apply_cma() {
   local want="$1" newval oldval
+  if strip_extraargs_cma; then
+    ok "已删除 extraargs 里的 cma=（family 模板自带），CMA 统一由 extraboardargs 提供"
+  fi
   oldval="$(current_extraboardargs)"
   if echo "$oldval" | grep -qE "cma=${want}"; then
     log "extraboardargs 已含 cma=${want}，无需改动"
@@ -131,6 +174,16 @@ report() {
     else
       warn "armbianEnv.txt 中无 extraboardargs 行"
     fi
+    # extraargs 是 family bootenv 模板的键（rk35xx 自带 cma=256M）。它和 extraboardargs
+    # 同时挂 cma= 时，boot.cmd 的 "${extraargs} ${extraboardargs}" 拼出两个 cma=，
+    # Linux 取最后一个 —— 生效值由拼接顺序决定，不是设计。--apply 会把这条清掉。
+    local ea; ea="$(current_extraargs)"
+    if [ -n "$ea" ]; then
+      echo "  extraargs      : ${ea}"
+      case " ${ea} " in
+        *" cma="*) warn "extraargs 也带 cma=（模板自带）：与 extraboardargs 并存 → 跑 'bash set-cma.sh --apply' 收敛到单一来源" ;;
+      esac
+    fi
   else
     warn "未找到 ${ARMBIANENV}（可能不是 Armbian）"
     manual_guide
@@ -145,6 +198,12 @@ check_only() {
   echo "  目标: ${kb} kB (${CMA_SIZE})  当前: ${cur} kB"
   if [ "$cur" -ge "$kb" ] 2>/dev/null; then
     ok "PASS: CmaTotal=${cur} kB ≥ ${kb} kB"
+    # 真实生效值以 cmdline 为准：cma= 出现多次时 Linux 取最后一个，今天「碰巧是 512M」
+    # 不代表设计正确 —— 模板顺序一变就退回 256M。这里只做提示，不推翻上面的 PASS。
+    local n; n="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | grep -c '^cma=' || true)"
+    if [ "${n:-0}" -gt 1 ] 2>/dev/null; then
+      warn "cmdline 里有 ${n} 个 cma=（$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | grep '^cma=' | paste -sd ' ' -)）：只有最后一个生效；跑 --apply 可收敛成一条"
+    fi
     return 0
   else
     die "FAIL: CmaTotal=${cur} kB < ${kb} kB（需 reboot 或先 --apply）"
