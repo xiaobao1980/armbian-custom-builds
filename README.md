@@ -12,7 +12,7 @@
 | `h96s` | RK3576 | rk35xx | vendor / noble | 目录名 `h96s`，实际 `BOARD=h96-m9`。2026-08-29 golden 基线：9999 DTS 补丁、SAI TDM lanes 修复、`h96-m9-configure`（音频/蓝牙/VPU）经 .csc hook 部署 |
 | `am60-sa12` | RK3588 | rockchip-rk3588 | vendor / bookworm | rk3588-am60-sa12 DTS（kernel+u-boot）、tcpci_et7303.ko、触控/HDMI/RT5616 全套 overlay |
 | `neardi-lz200` | RK3576 | rk35xx | vendor / trixie | 自定义 defconfig/DTS 补丁 + `linux-neardi-lz200-rk3576.config`。RELEASE **必须** trixie（预编译 deb 钉死 trixie SONAME，如 `libplacebo349`；bookworm 的 libplacebo 5.229 编不出 mpv 0.41） |
-| `cm3588-nas` | RK3588 | rockchip-rk3588（vendor 时 `LINUXFAMILY=rk35xx`） | vendor / trixie | FriendlyElec CM3588 NAS，**无头服务端**。描述文件是上游副本（`main @ 19f1b229c686`，见文件头 provenance），本地只追加板级 hook：vendor 串口 `serialcon=ttyFIQ0`、journald 持久化、RTL8125B 网卡自检、风扇落地自检；另带一个 vendor 内核补丁 `userpatches/kernel/rk35xx-vendor-6.1/0001-cm3588-nas-enable-pwm-fan.patch`（FriendlyElec 的 DTS 把 `pwm-fan` 写成 `status = "disabled"`，裸镜像风扇口是死的：打开它，并把 `rockchip,temp-trips` 由 50..70 改 45..65 ℃，对齐社区方案；注意有 `temp-trips` 时档位走内核查表、**不生成** `cooling_device`，要跑社区守护进程就得删掉 `temp-trips`，二选一）。两个 2.5G 口 = **RTL8125B**（PCIe，非 RK3588 自带 GMAC），上游 udev 规则按 PCI 地址命名 `eth0`，`r8125`/`r8169` 通吃。rkmpp 栈在这块板是**硬件转码**用途（ffmpeg `*_rkmpp`），不是桌面播放 |
+| `cm3588-nas` | RK3588 | rockchip-rk3588（vendor 时 `LINUXFAMILY=rk35xx`） | vendor / trixie | FriendlyElec CM3588 NAS，**无头服务端**。描述文件是上游副本（`main @ 19f1b229c686`，见文件头 provenance），本地只追加板级 hook：vendor 串口 `serialcon=ttyFIQ0`、journald 持久化、RTL8125B 网卡自检、风扇落地自检；另带一个 vendor 内核补丁 `userpatches/kernel/rk35xx-vendor-6.1/0001-cm3588-nas-enable-pwm-fan.patch`（FriendlyElec 的 DTS 把 `pwm-fan` 写成 `status = "disabled"`，裸镜像风扇口是死的：打开它，并把 `rockchip,temp-trips` 由 50..70 改 45..65 ℃，对齐社区方案；注意有 `temp-trips` 时档位走内核查表、**不生成** `cooling_device`，要跑社区守护进程就得删掉 `temp-trips`，二选一）。两个 2.5G 口 = **RTL8125B**（PCIe，非 RK3588 自带 GMAC），上游 udev 规则按 PCI 地址命名 `eth0`，`r8125`/`r8169` 通吃。rkmpp 栈在这块板是**硬件转码**用途（ffmpeg `*_rkmpp`），不是桌面播放。`audio-friendly-names` 在无头模式下只装 `audio-switch`：**card0 是 hdmiin 纯采集卡（无 PCM）**，ALSA 默认落到它就没声，装机后 `sudo audio-switch hdmi`（或 `3.5` / `dp` / `hdmi1`）切一次，`audio-switch list` 看候选；出厂不预设默认出口 |
 | `rock-5-itx` | RK3588 | rockchip-rk3588（vendor 时 `LINUXFAMILY=rk35xx`） | vendor / trixie | Radxa Rock 5 ITX，xfce + X11 硬解桌面（`build.env` 档位 `mid`；Build-All 批量版仍强制 `minimal`，见「维护约定」）。同样是上游副本 + 同款串口 hook + RTL8852BE 无线自检。无线 = **Radxa A8 模组 / RTL8852BE**：Wi-Fi 走 PCIe（`rtw88_8852be`）、蓝牙走 USB（`rtl_bt` 固件）→ 本板**没有 BT_UART**，不适用 am60/h96s 的 UART 蓝牙路子；`dtb-no-mac` / `ntp-boot-sync` / `bluetooth-autoconnect` 全开 |
 
 每个板卡目录结构（U24 构建机同构）：
@@ -38,6 +38,10 @@ common/extensions/
 │                          #   → 烧卡停在文字控制台，187 实测；幂等，非桌面镜像自动跳过）
 ├── bluetooth-autoconnect.sh # 开机自动回连 A2DP/HFP 蓝牙音频（BlueZ 默认不主动连，188 板冷启动实测）
 ├── ntp-boot-sync.sh       # 开机强制 NTP 校时（无 RTC 电池的板子上电时间归零，渐进同步不够）
+├── audio-friendly-names.sh # 声卡友好命名：桌面镜像开机生成 udev + WirePlumber 规则（HDMI-0/HDMI-1/
+│                          #   DP/耳机 不再全叫 "Built-in Audio"；udev 的 SOUND_DESCRIPTION 只有
+│                          #   PulseAudio 读，PipeWire 必须走 WirePlumber，且 0.4 Lua / 0.5 SPA-JSON
+│                          #   两套语法不通用）；无桌面镜像改装 /usr/local/bin/audio-switch 切 ALSA 出口
 ├── dtb-no-mac/            # 构建时去除 DTB 里写死的 MAC，让厂商内核从 efuse/cpuid 派生每板唯一 MAC
 │   └── rk-dtb-no-mac.sh   #   （量产克隆卡同一 MAC 互相冲撞的根因）
 └── _archive/

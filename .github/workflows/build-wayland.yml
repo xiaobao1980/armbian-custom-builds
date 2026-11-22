@@ -424,6 +424,10 @@ jobs:
           add_ext ntp-boot-sync
           # 构建时去除 DTB 写死 MAC，让 RK 厂商内核从 efuse/cpuid 派生每板唯一 MAC
           add_ext dtb-no-mac
+          # 声卡友好命名：HDMI-0/HDMI-1/DP/耳机 不再全叫 "Built-in Audio"。
+          # 只写 udev 的 SOUND_DESCRIPTION 对 PipeWire 无效（它不读该属性），
+          # 扩展按 WirePlumber 实际版本落 0.4 Lua / 0.5 SPA-JSON 规则（111 板实测）。
+          add_ext audio-friendly-names
 
           # 通知 rkmpp-mpv 扩展：这是 Wayland 镜像（文件通道，规避 sudo 环境白名单丢变量）。
           mkdir -p armbian-build/userpatches
