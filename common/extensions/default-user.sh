@@ -20,6 +20,9 @@
 #   DEFAULT_SUDO_NOPASSWD         yes=该用户 sudo 免密（默认 no）
 #   DEFAULT_DESKTOP_AUTOLOGIN     yes=显示管理器自动登录（默认 no）
 #   DEFAULT_DESKTOP_SESSION_TYPE  x11|wayland|auto（默认 auto；决定 gdm3 的 WaylandEnable）
+#                                 ⚠️ gdm3 + wayland 落的是 TimedLogin/Delay=0 而非 AutomaticLogin，
+#                                 后者会让 GDM 在 tty1 再拉一个 greeter 与自动登录会话抢 card0，
+#                                 详见 setup_autologin() 的 gdm3 分支注释（207 板实锤）。
 #
 # 钩子时序（已对照 armbian/build main 源码核实）：
 #   post_family_tweaks                → lib/functions/rootfs/distro-agnostic.sh:459
@@ -364,16 +367,43 @@ setup_autologin() {
 		# 两处都写、值一致，兼容两种发行版：custom.conf 缺失时先创建
 		# （Ubuntu 靠它），daemon.conf 仅在已存在时写（不凭空造不完整配置）。
 		[ -f /etc/gdm3/custom.conf ] || : > /etc/gdm3/custom.conf
+		# Wayland 会话走 TimedLogin，不用 AutomaticLogin（207 板 lz120 实锤）：
+		# GDM debug 原话是 "GdmManager: session has its display server, reusing
+		# our server for another login screen" —— 自动登录会话落在 tty2 并自带
+		# Wayland 显示服务器，GDM 于是把 tty1 那台原 display 改拿去跑 greeter。
+		# 而 GdmLocalDisplayFactory 只在「切到已注册会话」之后回收后台 display，
+		# AutomaticLogin 这条路上 greeter 永不被回收 → 两个合成器长期共占 card0，
+		# gnome-shell 一直刷 "Page flip failed: drmModeAtomicCommit: Invalid argument"。
+		# TimedLogin + TimedLoginDelay=0 的差别正在于此：GDM 认为登录界面是「可放弃的」，
+		# 会话起来后把 greeter 收掉，实测 card0 只剩一个合成器、翻页报错归零。
+		# 前提是不能同时启用 AutomaticLogin —— GDM 只要 AutomaticLoginEnable=true 就走
+		# 那条路，Timed 键完全不生效，所以 Wayland 分支只写 Timed、不写 Automatic。
 		for gdm_conf in /etc/gdm3/custom.conf /etc/gdm3/daemon.conf; do
 			[ -f "$gdm_conf" ] || continue
-			set_ini "$gdm_conf" daemon AutomaticLoginEnable true
-			set_ini "$gdm_conf" daemon AutomaticLogin "$DUSER"
 			case "$DSESSION_TYPE" in
 				x11) set_ini "$gdm_conf" daemon WaylandEnable false ;;
 				wayland) set_ini "$gdm_conf" daemon WaylandEnable true ;;
 			esac
+			if [ "$DSESSION_TYPE" = "wayland" ]; then
+				# Automatic 两键保持出厂的注释态（全新 rootfs 就是这状态，GDM 只在
+				# 值等于 true 时认它）；这里显式写 false 反而造出一个没实测过的组合。
+				set_ini "$gdm_conf" daemon TimedLoginEnable true
+				set_ini "$gdm_conf" daemon TimedLogin "$DUSER"
+				set_ini "$gdm_conf" daemon TimedLoginDelay 0
+				# 会话切换会把刚回收的 greeter 再拉回来，与上面「单一合成器」直接冲突
+				set_ini "$gdm_conf" daemon AllowUserSwitching false
+			else
+				set_ini "$gdm_conf" daemon AutomaticLoginEnable true
+				set_ini "$gdm_conf" daemon AutomaticLogin "$DUSER"
+			fi
 		done
-		if grep -qs "^AutomaticLoginEnable=true" /etc/gdm3/custom.conf /etc/gdm3/daemon.conf; then
+		if [ "$DSESSION_TYPE" = "wayland" ]; then
+			if grep -qs "^TimedLoginEnable=true" /etc/gdm3/custom.conf /etc/gdm3/daemon.conf; then
+				log "gdm3 免密登录: Wayland 走 TimedLogin（Delay=0），用户=${DUSER}"
+			else
+				log "警告: gdm3 TimedLogin 键未落地（custom.conf / daemon.conf 都不含 TimedLoginEnable=true）"
+			fi
+		elif grep -qs "^AutomaticLoginEnable=true" /etc/gdm3/custom.conf /etc/gdm3/daemon.conf; then
 			log "gdm3 自动登录: custom.conf + daemon.conf 双写完成，用户=${DUSER}"
 		else
 			log "警告: gdm3 自动登录键未落地（custom.conf / daemon.conf 都不含 AutomaticLoginEnable=true）"
