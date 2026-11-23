@@ -23,6 +23,37 @@ if [[ ! -d "${BUILD}" ]]; then
     exit 1
 fi
 
+# ── 守卫：板级配置文件不许裸赋值「命令行会传的键」──────────────────────────────
+# 背景：cmdline 的 KEY=VALUE 只在 early 阶段应用；config/boards/<board>.{csc,conf} 在
+# 其后的 config_source_board_file 阶段被 source，而那一阶段之后**不再重放**命令行
+# （只有 userpatches/config-*.conf 的 preset 通道会在 source 完再
+# apply_cmdline_params_to_env "after config ..."）。于是板级裸赋值会静默顶掉调用方传值。
+# 2026-11-22 的 neardi-lz120.csc 里 `ENABLE_EXTENSIONS="verify-boot-env,
+# lz120-kernel-config,audio-friendly-names"` 就凭一行吞掉了桌面 workflow 追加的 8 项
+# （含 desktop-dm），镜像里没有 display-manager.service → 桌面起不来。见 README「维护约定」。
+GUARD_KEYS=(ENABLE_EXTENSIONS BOARD BRANCH RELEASE BUILD_DESKTOP BUILD_MINIMAL
+            DESKTOP_ENVIRONMENT DESKTOP_TIER INCLUDE_HOME_DIR KERNEL_CONFIGURE
+            KERNEL_BTF COMPRESS_OUTPUTIMAGE EXPERT)
+
+guard_board_config() {
+    local dir="${SRC}/config/boards" f key hit
+    [[ -d "${dir}" ]] || return 0
+    for f in "${dir}"/*.csc "${dir}"/*.conf; do
+        [[ -f "${f}" ]] || continue
+        for key in "${GUARD_KEYS[@]}"; do
+            # 只算行首（可带缩进/export）的裸赋值；注释行与 ${KEY:=...} 判空展开不算
+            hit="$(grep -nE "^[[:space:]]*(export[[:space:]]+)?${key}=" "${f}" || true)"
+            [[ -z "${hit}" ]] && continue
+            echo "ERROR: 板级文件裸赋值了 ${key} —— 板级 config 在命令行之后被 source 且不重放" >&2
+            echo "       命令行，会静默顶掉调用方/build.env 传进来的同名值。命中行：" >&2
+            printf '%s\n' "${hit}" | sed "s|^|         ${f}:|" >&2
+            echo "       修法：删掉该行，板级兜底写进 boards/${BOARD}/build.env。" >&2
+            exit 1
+        done
+    done
+    return 0
+}
+
 # 清理 macOS 元数据文件（.DS_Store / AppleDouble ._*）。
 # 背景：这些文件不被 .gitignore 跟踪，但 `cp -a` 会照样拷进构建树，
 # 历史上曾以 .AppleDouble 形式污染过产物。拷贝后主动清理目标侧，最稳。
@@ -43,6 +74,8 @@ sync_subdir() {
     purge_macos_metadata "${BUILD}/${sub}"
     echo "  synced ${sub}/ ($(find "${SRC}/${sub}" -type f ! -name '.DS_Store' ! -name '._*' | wc -l | tr -d ' ') files)"
 }
+
+guard_board_config   # 先校验再拷贝，避免留下半同步的构建树
 
 echo "==> 同步板卡 '${BOARD}' -> ${BUILD}"
 sync_subdir config
