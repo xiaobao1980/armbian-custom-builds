@@ -84,7 +84,7 @@ function post_family_tweaks__lz120_display_layout() {
 	[[ "${BUILD_DESKTOP:-no}" == "yes" ]] || return 0
 	[[ -d "${SDCARD:-}" ]] || { display_alert "Extension: ${BOARD}" "SDCARD 不可用，跳过显示布局" "warn"; return 0; }
 
-	mkdir -p "${SDCARD}/usr/local/sbin" "${SDCARD}/etc/lightdm/lightdm.conf.d" "${SDCARD}/etc/xdg/autostart"
+	mkdir -p "${SDCARD}/usr/local/sbin" "${SDCARD}/etc/lightdm/lightdm.conf.d" "${SDCARD}/etc/xdg/autostart" "${SDCARD}/etc/default"
 
 	cat >"${SDCARD}/usr/local/sbin/lz120-display-layout.sh" <<'LZLAYOUT'
 #!/usr/bin/env bash
@@ -257,6 +257,15 @@ esac
 exit 0
 LZLAYOUT
 	chmod 755 "${SDCARD}/usr/local/sbin/lz120-display-layout.sh"
+
+	# 开关文件落一份，而不是只靠脚本里的 ${LZ120_NATIVE_HDMI_PRIMARY:-1} 缺省值：
+	# 现场要关这个行为时改这一行就行，不必去翻脚本源码。
+	cat >"${SDCARD}/etc/default/lz120-display" <<'LZDEFAULT'
+# 1 = 原生 HDMI（丝印 Tx1）设为主屏，LT8912 桥那路（Tx2）挪成右侧扩展屏
+# 0 = 完全不动，保持会话自己的布局
+LZ120_NATIVE_HDMI_PRIMARY=1
+LZDEFAULT
+	chmod 644 "${SDCARD}/etc/default/lz120-display"
 
 	# lightdm 读 drop-in 的顺序是 /usr/share → /etc/lightdm/lightdm.conf.d → lightdm.conf，
 	# 用片段而不是 sed 主配置：幂等、也不跟 default-user 之类改动互相踩。
