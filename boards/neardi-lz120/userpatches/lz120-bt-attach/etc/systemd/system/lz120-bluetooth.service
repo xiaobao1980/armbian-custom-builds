@@ -1,0 +1,17 @@
+[Unit]
+Description=LZ120 RTL8852BS UART 蓝牙（rtk_hciattach /dev/ttyS1 + 掉电重上电后自动重 attach）
+Documentation=file:/usr/local/sbin/lz120-bt-attach.sh
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/lz120-bt-attach.sh
+Restart=always
+RestartSec=3
+# 不写 KillMode=process：脚本会把 rtk_hciattach 作为子进程留在本 cgroup 里，
+# 只杀主进程的话子进程继续占着 /dev/ttyS1，下一任 attach 必然 "Can't set device:
+# Device or resource busy"。默认 control-group 连子进程一起收干净。
+
+[Install]
+WantedBy=multi-user.target

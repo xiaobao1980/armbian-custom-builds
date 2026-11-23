@@ -1359,7 +1359,7 @@ index cb9067aa7526..678b5710cdbe 100644
 +};
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3568-neardi-lz120-linux.dts
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,55 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * Copyright (c) 2023 Rockchip Electronics Co., Ltd.
@@ -1384,12 +1384,25 @@ index cb9067aa7526..678b5710cdbe 100644
 +#include "rk3568-neardi-lpa3568-outside-lj120.dtsi"	/* for lba3568 lc120 + ld120 + lj120 */
 +#include <dt-bindings/display/rockchip_vop.h>
 +
++/* 游标窗用 Esmart，不跟厂商默认的 Cluster（2026-11-24 板上定位，勿改回）。
++ * rockchip_vop2_reg.c 里 rk3568 cluster 窗的 .format_modifiers = format_modifiers_afbc_no_linear_mode，
++ * 只报 AFBC、不含 DRM_FORMAT_MOD_LINEAR；而 GNOME/mutter 的光标缓冲是 GBM 分配的 AR24 +
++ * modifier 0x0，于是内核原子校验直接拒绝：
++ *   [drm:drm_atomic_check_only] [PLANE:75:Cluster0-win0] invalid pixel format AR24 little-endian (0x34325241), modifier 0x0
++ * mutter 是「CRTC + 主平面 + 游标」一笔提交，游标把整笔带崩 → vp0 连主平面 Smart0-win0
++ * 也没附上（debugfs crtc[91] plane_mask=0）→ 原生 HDMI（丝印 Tx1）无信号黑屏，同时光标也
++ * 看不见；vp1 那笔不含游标所以照常提交，表现为「Tx2 有桌面、Tx1 黑屏」。厂商从没踩到是因为
++ * 自家图形栈光标走 AFBC，且 SDK 默认只开 hdmitx1 单屏。
++ * esmart 窗用 formats_for_rk356x_esmart（含 ARGB8888）+ format_modifiers（含 LINEAR），两者都吃。
++ * 换完实测：dmesg 报 "Esmart0/Esmart1-win0 as cursor plane for vp0/vp1"，两路 plane_mask 分别
++ * 1/4、fb 都由 gnome-shell 分配，Page flip failed 归零，双屏同时出画面。主平面仍取
++ * Smart0/Smart1（vp 的 plane_mask 0x15/0x2a 不变），不影响视频通路。 */
 +&vp0 {
-+	cursor-win-id = <ROCKCHIP_VOP2_CLUSTER0>;
++	cursor-win-id = <ROCKCHIP_VOP2_ESMART0>;
 +};
 +
 +&vp1 {
-+	cursor-win-id = <ROCKCHIP_VOP2_CLUSTER1>;
++	cursor-win-id = <ROCKCHIP_VOP2_ESMART1>;
 +};
 +
 +/*

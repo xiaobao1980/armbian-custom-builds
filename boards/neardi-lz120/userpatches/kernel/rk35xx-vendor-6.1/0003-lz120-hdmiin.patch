@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3568-neardi-lpa3568-hdmirx.dtsi
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,164 @@
 +/* for rk628 */
 +/* hdmi to csi */
 +/ {
@@ -20,7 +20,15 @@
 +		simple-audio-card,name = "rockchip,hdmiin";
 +		simple-audio-card,bitclock-master = <&dailink0_master>;
 +		simple-audio-card,frame-master = <&dailink0_master>;
-+		status = "okay";
++		/* 原厂这里是 "okay"，LZ120 桌面镜像改 "disabled"：这路伴音的 CPU 侧是
++		 * &i2s3_2ch 且带 rockchip,capture-only（只收不发），但 simple-card 不认
++		 * 只收/只发方向位（6.1 里 capture_only 只是 include/sound/soc.h 的结构体位），
++		 * 所以 ALSA 照样给它注册出 playback 子流。结果 pipewire 一起来就撞上
++		 * rockchip_i2s_tdm.c:2823 的 symmetric_rate，两个方向参数对不上 →
++		 * "ASoC: error at snd_soc_dai_hw_params on fe430000.i2s: -22" 反复刷内核；
++		 * 手工 speaker-test 能 open、写数据 EIO，本来就是条不通的路。
++		 * RK628 的视频采集走 /dev/video* + media0，与本节点无关，关掉不影响 HDMI-IN 采集。 */
++		status = "disabled";
 +		simple-audio-card,cpu {
 +			sound-dai = <&i2s3_2ch>;
 +		};
