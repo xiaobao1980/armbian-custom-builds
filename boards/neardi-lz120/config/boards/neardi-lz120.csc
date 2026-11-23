@@ -11,10 +11,7 @@
 #      厂商/上游后续改动只能手工回合。
 #   本地追加（都在文件末尾，逐条登记）：
 #     1) ENABLE_EXTENSIONS=verify-boot-env,lz120-kernel-config,audio-friendly-names
-#        —— verify-boot-env 出厂前校验 armbianEnv.txt 的 rootdev/fdtfile（common/extensions/），
-#           lz120-kernel-config 把 LT8912 / panel-simple 两个内核符号置 y（本板 userpatches/extensions/），
-#           audio-friendly-names 在无头镜像下只装 audio-switch 手工切 ALSA 出口（音频未实测，
-#           该分支不装 boot 服务、不预设默认出口 → 对开机零影响）
+#        —— 已整条删除，唯一来源改为同目录 build.env；原因见文件末尾「本地追加 1」。
 #     2) PACKAGE_LIST_ADDITIONAL 追加 i2c-tools / libdrm-tests
 #        —— LT8912 HDMI 通路 bring-up 用（i2cdetect 探 0x48/0x49、modetest 点屏）
 #
@@ -35,13 +32,28 @@ BOOT_FDT_FILE="rockchip/rk3568-neardi-lz120-linux.dtb"
 BOOT_SCENARIO="spl-blobs"
 IMAGE_PARTITION_TABLE="gpt"
 
-# ── 本地追加 1：扩展 ────────────────────────────────────────────────────────
-# ⚠️ userpatches/extensions/*.sh 不会被自动加载，必须在这里（或 build.env）列名。
-#    build.env 的 ENABLE_EXTENSIONS 会**覆盖**本行，两处必须保持一致。
-ENABLE_EXTENSIONS="verify-boot-env,lz120-kernel-config,audio-friendly-names"
+# ── 本地追加 1：扩展（已移出本文件，唯一来源是同目录 build.env）───────────────
+# 这里**不能**再写 ENABLE_EXTENSIONS= 裸赋值，它是 lz120 桌面镜像起不来的根因：
+#   · compile.sh 命令行（workflow 由 build.env 拼出）传进来的值只在 "early" 阶段应用；
+#   · 本文件在之后的 config_source_board_file 阶段被 source，裸赋值把整串顶掉；
+#   · initialize_extension_manager 只在 do_main_configuration 首次调用时读一次
+#     ENABLE_EXTENSIONS，之后 enable_extension() 直接 exit 2 → 被顶掉的项目没有补救机会。
+# 2026-11-22 的 lz120 X11/Wayland 两次构建因此只启用了本行那 3 项，workflow 追加的
+# 8 项（desktop-dm、default-user、rkmpp-mpv、chromium-rkmpp、rk35xx-chinese-desktop、
+# bluetooth-autoconnect、ntp-boot-sync、dtb-no-mac）全丢：镜像里没有
+# display-manager.service（noble 的 lightdm unit 是 static 且 deb 不自带该链接）→
+# 首启向导走完重启就停在文字界面，且中文字体/mpv(rkmpp)/自动登录一律缺失。
+# 本板需要的 3 项已在 build.env 列名，含义见那里的注释：verify-boot-env 出厂前校验
+# armbianEnv.txt 的 rootdev/fdtfile；lz120-kernel-config 把 LT8912/panel-simple 置 y；
+# audio-friendly-names 无头分支只装 audio-switch。
+# ⚠️ 手工跑 compile.sh 时必须自己带 ENABLE_EXTENSIONS（README 的本机参数即来自
+#    build.env）；漏掉 lz120-kernel-config 不会报错，只是 LT8912 那条 HDMI 通路
+#    的内核符号没置上。
 
 # ── 本地追加 2：bring-up 工具包 ─────────────────────────────────────────────
-# Bring-up tooling for the LT8912 HDMI_TX1 path: modetest, i2c probing, weston for the second display
+# Bring-up tooling for the LT8912 DSI->HDMI bridge path (baseboard silkscreen HDMI Tx2;
+# the native dw-hdmi is silkscreen HDMI Tx1, next to the VGA connector). modetest, i2c
+# probing, weston for the second display.
 PACKAGE_LIST_ADDITIONAL="$PACKAGE_LIST_ADDITIONAL i2c-tools libdrm-tests"
 
 # ── 关于串口：本板**不需要** serialcon=ttyFIQ0 的板级 hook ────────────────────

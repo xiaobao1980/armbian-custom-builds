@@ -16,8 +16,11 @@
 #        `systemctl enable gdm3` 在真实系统（有 systemd 在跑）时创建 —— chroot 里
 #        没有 PID 1，于是整条链缺最后一环：
 #            graphical.target → Wants=display-manager.service → （缺失）→ 文字控制台
-#        XFCE/lightdm 路线不受影响，因为 lightdm 的 deb 自带该链接，所以这个坑是
-#        GNOME/gdm 独有，只在 Wayland 定制版（默认 gnome）暴露。
+#        早先以为「XFCE/lightdm 路线不受影响，lightdm 的 deb 自带该链接」——2026-11-22
+#        在 noble(XFCE) 板上实测推翻：lightdm 1.30.0-0ubuntu14 的 `dpkg -L lightdm`
+#        里没有任何 display-manager.service，unit 又是 static（无 [Install]），
+#        /etc/systemd/system/display-manager.service 确实缺失。所以 GNOME/gdm 和
+#        XFCE/lightdm 两条路线都要靠本扩展补链接，不是 Wayland 定制版独有。
 #
 #  做法：在所有定制步骤之后（post_armbian_repo_customize_image）检查一次，
 #        * 检测已装的 DM 与它的 unit 名（gdm3/gdm/lightdm/sddm 都覆盖）
