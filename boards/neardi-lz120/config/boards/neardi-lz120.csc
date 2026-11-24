@@ -9,14 +9,17 @@
 #   ⚠️ armbian/build 上游**没有**这块板（构建树里 config/boards/neardi-lz120.csc 一直是
 #      未跟踪文件），所以没有 upstream commit 可比、也没有可复制的 diff 命令；
 #      厂商/上游后续改动只能手工回合。
-#   本地追加（都在文件末尾，逐条登记）：
+#   本地追加（3~5 在文件末尾，逐条登记）：
+#     0) 顶部 BOOT_FDT_FILE 改指 rk3568-neardi-lz120-linux-hdmi1.dtb（单屏变体）、
+#        新增 DTB_KEEP_EXTRA 保住双屏那份 —— 与厂商件在这一行起分叉，理由见「本地追加 3」。
 #     1) ENABLE_EXTENSIONS=verify-boot-env,lz120-kernel-config,audio-friendly-names
 #        —— 已整条删除，唯一来源改为同目录 build.env；原因见文件末尾「本地追加 1」。
 #     2) PACKAGE_LIST_ADDITIONAL 追加 i2c-tools / libdrm-tests
 #        —— LT8912 HDMI 通路 bring-up 用（i2cdetect 探 0x48/0x49、modetest 点屏）
 #     3) post_family_tweaks__lz120_display_layout（文件末尾）
-#        —— 落盘显示布局脚本 + 开关文件 + autostart/lightdm 两个入口，把原生 HDMI
-#           定成主屏、LT8912 桥那路挪右侧扩展屏；含义与两条实测死路见「本地追加 3」。
+#        —— 落盘显示布局脚本 + 开关文件 + autostart/lightdm 两个入口；只在**双屏 dtb**
+#           下把原生 HDMI 定成主屏、LT8912 桥那路挪右侧扩展屏（单屏 dtb 下自然早退）。
+#           出厂默认走单屏 dtb；运行态死路与两份 dtb 的取舍依据见「本地追加 3」。
 #     4) post_family_tweaks__lz120_can_quiet（文件末尾）
 #        —— /etc/modprobe.d/99-lz120-can-quiet.conf：CAN 接口保留，只压掉
 #           rk3568_can_get_berr_counter 那行 netdev_dbg 刷屏；依据见「本地追加 4」。
@@ -39,7 +42,11 @@ BOOTCONFIG="neardi-lz120-rk3568_defconfig"
 KERNEL_TARGET="vendor"
 FULL_DESKTOP="yes"
 BOOT_LOGO="desktop"
-BOOT_FDT_FILE="rockchip/rk3568-neardi-lz120-linux.dtb"
+# 出厂默认单屏变体（只留原生 HDMI 丝印 Tx1）；双屏那份留在镜像里，改 fdtfile 即切换。
+# 两份都由 0001-lz120-dts.patch 编出来；DTB_KEEP_EXTRA 告诉 rk35xx-chinese-desktop
+# 的 DTB 过滤器「这两份都是本板的，别删第二份」，详见「本地追加 3」。
+BOOT_FDT_FILE="rockchip/rk3568-neardi-lz120-linux-hdmi1.dtb"
+DTB_KEEP_EXTRA="rk3568-neardi-lz120-linux.dtb"
 BOOT_SCENARIO="spl-blobs"
 IMAGE_PARTITION_TABLE="gpt"
 
@@ -67,21 +74,33 @@ IMAGE_PARTITION_TABLE="gpt"
 # probing, weston for the second display.
 PACKAGE_LIST_ADDITIONAL="$PACKAGE_LIST_ADDITIONAL i2c-tools libdrm-tests"
 
-# ── 本地追加 3：把原生 HDMI 定成主屏（LT8912 桥那路保留为扩展屏）────────────────
-# 现象（2026-11-23 在 207 板实测）：DSI→LT8912 桥没有 EDID/HPD，DRM 恒报 connected，
-# 且 mutter 把它当 is-builtin（内置屏）优先选成主屏，于是桌面拼成 3840x1080：
-# 接原生 Tx1 的那台只拿到没有顶栏/面板的「副屏」，主屏落到没接东西的幽灵屏上。
-# 规则：两路都保持点亮，只把主屏和原点 (0,0) 换成原生 HDMI-1、桥那路挪到右边。
-# ⚠️ 别改成「关掉 DSI-1」，也别改成「设备树里 disable 掉 dsi0/route-dsi0/lt8912」，两条都实测过：
-#   · 运行期让 mutter 关 DSI：GetCurrentState 里 DSI-1 确实没了 is-current，但
-#     /sys/kernel/debug/dri/0/state 里 DSI-1 仍挂着 video_port1，软硬状态分叉，
-#     gnome-shell 从此刻起持续刷 `Page flip failed: drmModeAtomicCommit: Invalid
-#     argument`，两台显示器全黑、用户会话掉线（2026-11-23 01:57 板上复现）。
-#   · 换 dtb 让 DSI 链路压根不存在：/sys/class/drm 只剩 HDMI-A-1、mutter 报单屏
-#     1920x1080、page flip 计数 0，但屏上只有开机 log、过会无信号。当时判成「这颗 SoC 上
-#     vp0 单独跑 HDMI 起不来」，2026-11-24 已推翻：单屏时 mutter 的游标同样压在 vp0 上，
-#     被拒的还是下面那笔原子提交，跟桥那路在不在设备树里无关。
-# 只想停掉本逻辑：/etc/default/lz120-display 写 LZ120_NATIVE_HDMI_PRIMARY=0。
+# ── 本地追加 3：出厂默认单屏（原生 HDMI 丝印 Tx1），双屏变体保留可随时切 ────────
+# 现象（2026-11-23 在 207 板实测）：DSI→LT8912 桥没有 EDID 也没有 HPD，DRM 恒报
+# card0-DSI-1 connected 1920x1080（驱动内部实际锁 720P，两边还不一致），于是
+#   · GNOME「显示器」里永远多一条点不动的幽灵屏；
+#   · mutter 把它当 is-builtin（内置屏）优先选成主屏，桌面拼成 3840x1080，
+#     接原生 Tx1 的那台只拿到没有顶栏/面板的「副屏」。
+# 出厂选择（2026-11-24 定案）：**两份 dtb 都出，默认单屏**。
+#   · 默认份 = BOOT_FDT_FILE 指向的 rk3568-neardi-lz120-linux-hdmi1.dtb，由 0001 补丁里
+#     rk3568-neardi-lz120-linux-hdmi1.dts 编出：整份只有「#include 基础那份 + 关掉
+#     route_dsi0 / dsi0 / lt8912 三个节点」。内核不注册这条输出，幽灵屏从源头消失，
+#     不用任何运行态干预。板上用 fdtput 改产物等效验过（DRM 只剩 card0-HDMI-A-1、
+#     lt8912 零探测、桌面正常）；源码级两份 dtb 反编译 diff 恰好只有那三行 status。
+#   · 要接 Tx2：改回另一份并重启，不用重烧镜像 ——
+#     sudo sed -i 's|^fdtfile=.*|fdtfile=rockchip/rk3568-neardi-lz120-linux.dtb|' /boot/armbianEnv.txt
+#     第二份由本文件顶部 DTB_KEEP_EXTRA 保住，否则会被 rk35xx-chinese-desktop 的
+#     DTB 过滤器当「非本板 dtb」删掉（它只保留唯一命中的那份）。
+#   · 用双屏那份时，下面这个 hook 把主屏和原点 (0,0) 换成原生 HDMI-1、桥那路挪到右边，
+#     两路都保持点亮；单屏那份下它按 drm_status 检查自然早退（DSI-1 不存在 → 不动布局）。
+#     只想停掉本逻辑：/etc/default/lz120-display 写 LZ120_NATIVE_HDMI_PRIMARY=0。
+# ⚠️ 别在**运行期**关 DSI（xrandr --off、GNOME 显示器设置里关掉都一样）：GetCurrentState 里
+#   DSI-1 确实没了 is-current，但 /sys/kernel/debug/dri/0/state 里它仍挂着 video_port1，
+#   软硬状态分叉，gnome-shell 从此刻起持续刷 `Page flip failed: drmModeAtomicCommit:
+#   Invalid argument`，两台显示器全黑、用户会话掉线（2026-11-23 01:57 板上复现）。
+#   要单屏就换 dtb，别碰运行态。
+# （历史误判留档，2026-11-24 已推翻，别据此再否掉 dtb 方案）当年换 dtb 后「屏上只有开机
+#   log、过会无信号」并不是 DSI 从设备树消失导致的：单屏时 mutter 的游标同样压在 vp0 上，
+#   被内核拒的还是下面那笔原子提交，根因是 cursor-win-id —— 修好之后单屏 dtb 实测正常。
 # 2026-11-24 板上定位结论（207 板，冷启动可稳定复现，别再重复走这些弯路）：
 #   · 根因是内核把 mutter 的原子提交拒了，与布局无关：厂商 dts 把 vp0/vp1 的 cursor-win-id
 #     设成 CLUSTER0/CLUSTER1，而 rk3568 的 cluster 窗在驱动里挂
@@ -145,8 +164,9 @@ log() { logger -t lz120-display "$*" 2>/dev/null || true; }
 drm_status() { cat "/sys/class/drm/card0-$1/status" 2>/dev/null || true; }
 
 # 原生 HDMI 没接线，或桥那路不存在 → 没有可交换的对象，一律不动
+# （DSI-1 不存在 = 出厂默认的单屏 dtb rk3568-neardi-lz120-linux-hdmi1.dtb，本来就该跳过）
 [ "$(drm_status HDMI-A-1)" = "connected" ] || exit 0
-[ "$(drm_status DSI-1)" = "connected" ] || exit 0
+[ "$(drm_status DSI-1)" = "connected" ] || { log "没有 DSI-1（单屏 dtb），布局不动"; exit 0; }
 
 stype="${XDG_SESSION_TYPE:-}"
 if [[ -z "$stype" ]]; then
@@ -433,7 +453,20 @@ LZCAN
 # 部署件在 userpatches/lz120-bt-attach/（二进制 + attach 脚本 + service），源码留档
 #   在 userpatches/rtk-hciattach-src/（GPL-2.0+，上游 github.com/rockchip-linux/rkwifibt）。
 #   为什么提交二进制：本板 build.env 不装工具链，构建期现编要么拖进 apt 安装要么引
-#   gcc，收益不比 am60-sa12 已经提交 .ko 的既有做法更干净；这份就是板上验证过的同一枚。
+#   gcc，收益不比 am60-sa12 已经提交 .ko 的既有做法更干净。
+# ⚠️ 提交的那枚**必须是静态链接**的（2026-11-24 r27 出厂镜像上踩的：镜像里蓝牙开关还是
+#   打不开，journal 里 rtk_hciattach 每轮都报
+#   "/lib/aarch64-linux-gnu/libc.so.6: version GLIBC_2.42' not found"，attach 进程根本没跑
+#   起来，守护于是稳定地「15s 等不到 hci0 → 重来」）。上一版入库的是厂商外部预编译件，
+#   它按 Rockchip 构建机的新 glibc 链，而 noble 只有 2.39、bookworm 只有 2.36 —— 同一条
+#   命令行、同一个芯片，换台主机就只是 exec 失败，而看门狗的报错只说「没等到 hci0」，
+#   看不出根因。静态件（file: "statically linked"，855584 字节，md5 7050afc7…）在
+#   noble/bookworm/trixie 上都不要再靠运行时 glibc，才是可以入库的那一枚。
+#   重编（板上有 gcc/make，源码零外部依赖）：
+#     gcc -O2 -Wall -c hciattach.c hciattach_rtk.c hciattach_h4.c rtb_fwc.c
+#     gcc -static -o rtk_hciattach hciattach*.o rtb_fwc.o
+#   验真：ldd 应回「不是动态可执行文件」，且 r27 镜像上实测 restart 后 journal 出现
+#   "attach 完成，hci0 就位" + "适配器已上电"、ps 只剩 1 枚 rtk_hciattach。
 function post_family_tweaks__lz120_bluetooth() {
 	[[ "${BRANCH}" == "vendor" ]] || return 0
 	[[ -d "${SDCARD:-}" ]] || { display_alert "Extension: ${BOARD}" "SDCARD 不可用，跳过蓝牙 attach 部署" "warn"; return 0; }

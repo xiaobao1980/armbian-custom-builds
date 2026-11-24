@@ -11,6 +11,7 @@
 #   3) 板级差异全部由各板 build.env / .csc 注入环境变量，公共代码不写死型号：
 #        RK_CN_USER / RK_CN_USER_PASS / RK_CN_ROOT_PASS
 #        RK_CN_TZ / RK_CN_IME(fcitx5|ibus|auto) / RK_CN_LOCALES_ALL / RK_CN_RIME_MIRROR
+#      DTB_KEEP_EXTRA（空格分隔的 dtb 文件名）由板级配置提供，见 _rk_cn_filter_dtb 注释。
 #      ⚠️ 口令留空 = 不写该口令，本扩展不再兜底任何默认口令（历史缺陷：兜底
 #      123456/123456789 被静默烧进镜像）。CI 必须走凭据文件，见下。
 #   4) 每块板在全新 clone 的 build 树里编译（sync-board-to-build.sh 只拷本板目录），
@@ -167,12 +168,26 @@ function post_install_kernel_debs__rk35xx_chinese_desktop() {
 # 安全性第一：无法确定本板 dtb 时**绝不删除**任何文件（宁可保留全部 dtb，
 # 也不能删错导致镜像无法启动）。
 # 板卡识别来源优先级：镜像内 armbian-image-release 的 BOARD > 构建变量 ${BOARD}。
+# -----------------------------------------------------------------------------
+# 一块板出多份 dtb 时（如 lz120 的双屏 / 单屏变体，靠 armbianEnv.txt 的 fdtfile 切换），
+# 由板级配置给 DTB_KEEP_EXTRA 传空格分隔的文件名：这些 dtb 既**不参与**下面的
+# 「唯一命中」判定（否则命中 2 个 → 触发安全分支 → 全量厂商 dtb 留在镜像里），
+# 也**一定不被删除**。留空 = 维持原行为。
 # =============================================================================
 _rk_cn_filter_dtb() {
 	local dtb_dir="${SDCARD}/boot/dtb/rockchip"
 	local overlay_dir="${dtb_dir}/overlay"
 	local board_name="" board_dtb="" chip_prefix="" extra_dtbo="rockchip-rk3588-panthor-gpu.dtbo"
 	local f
+
+	# 板级保留名单（词法切分，不展开 glob：值来自仓库内的 .csc，不是外部输入）
+	local -a keep_extra=() _keep_args=()
+	read -r -a keep_extra <<< "${DTB_KEEP_EXTRA:-}" || true
+	for f in ${keep_extra[@]+"${keep_extra[@]}"}; do
+		[[ -n "${f}" ]] && _keep_args+=('!' '-name' "${f}")
+	done
+	local keep_note=""
+	[[ ${#keep_extra[@]} -gt 0 ]] && keep_note=" / DTB_KEEP_EXTRA: ${keep_extra[*]}"
 
 	# 1) 板卡名：优先读镜像内 armbian-image-release（构建期最准）
 	for f in "${SDCARD}/etc/armbian-image-release" "${SDCARD}/etc/armbian-release"; do
@@ -191,16 +206,38 @@ _rk_cn_filter_dtb() {
 	#    （rock-5b 与 rock-5b-model-b、rk3588s- 与 rk3588b- 前缀同名板），
 	#    head -n1 取到的那个被保留、**其余全部删除**，完全可能把唯一能启动的
 	#    dtb 删掉变砖。改成确定性的两级匹配：精确后缀 → 芯片前缀收窄 → 仍不唯一就【不删】。
-	local -a _dtb_all=() _dtb_hit=()
-	local _d
+	local -a _dtb_raw=() _dtb_all=() _dtb_hit=()
+	local _d _k _is_keep
 	while IFS= read -r _d; do
-		[[ -n "${_d}" ]] && _dtb_all+=("$(basename "${_d}")")
+		[[ -n "${_d}" ]] || continue
+		_d="$(basename "${_d}")"
+		_dtb_raw+=("${_d}")
+		# 名单内的 dtb 不参与唯一性判定（它们是「有意为之的第二份」，不是同板误命中）
+		_is_keep=no
+		for _k in ${keep_extra[@]+"${keep_extra[@]}"}; do
+			[[ "${_d}" == "${_k}" ]] && _is_keep=yes && break
+		done
+		[[ "${_is_keep}" == "yes" ]] && continue
+		_dtb_all+=("${_d}")
 	done < <(find "${dtb_dir}" -maxdepth 1 -type f -name '*.dtb' -print 2>/dev/null | LC_ALL=C sort)
 
-	if [[ ${#_dtb_all[@]} -eq 0 ]]; then
+	if [[ ${#_dtb_raw[@]} -eq 0 ]]; then
 		display_alert "DTB filter: ${dtb_dir} 下没有任何 dtb，跳过" "${EXTENSION}" "warn"
 		return 0
 	fi
+	# 名单把候选清空了（例如 DTB_KEEP_EXTRA 误把本板 dtb 也列进去）→ 退回全量参与判定，
+	# 免得静默走进「0 命中 → 什么都不删」，把几百份厂商 dtb 留在镜像里。
+	[[ ${#_dtb_all[@]} -gt 0 ]] || _dtb_all=("${_dtb_raw[@]}")
+
+	# 名单里写了镜像中不存在的名字 = 板级配置打错字，第二份 dtb 其实会被删掉：必须喊出来
+	for _k in ${keep_extra[@]+"${keep_extra[@]}"}; do
+		local -a _found=()
+		for _d in "${_dtb_raw[@]}"; do
+			[[ "${_d}" == "${_k}" ]] && _found+=("${_d}")
+		done
+		[[ ${#_found[@]} -gt 0 ]] || display_alert "DTB filter: DTB_KEEP_EXTRA 里的 ${_k} 在 ${dtb_dir} 不存在（拼错或该 dtb 没编出来）" \
+			"${EXTENSION}" "warn"
+	done
 
 	# 2a) 精确后缀 -<board>.dtb（不再是任意子串、不再当正则解释）
 	for _d in "${_dtb_all[@]}"; do
@@ -226,10 +263,24 @@ _rk_cn_filter_dtb() {
 			[[ ${#_narrow[@]} -gt 0 ]] && _dtb_hit=("${_narrow[@]}")
 		fi
 	fi
+	# 2d) 仍不唯一且本板声明了多份 dtb → 用出厂 fdtfile（BOOT_FDT_FILE）定唯一：镜像启动用的
+	#     就是这一份，按它保留比按板名猜更准。闸门加 ${#keep_extra[@]} -gt 0 是为了**只**影响
+	#     显式列了 DTB_KEEP_EXTRA 的板子 —— 没列的板子走不到这里，与改动前逐字节同行为
+	#     （否则原本「命中多个 → 一个都不删」的板子会突然开始删 dtb）。
+	if [[ ${#_dtb_hit[@]} -ne 1 && ${#keep_extra[@]} -gt 0 && -n "${BOOT_FDT_FILE:-}" ]]; then
+		local _hint="$(basename "${BOOT_FDT_FILE}")" _hit2=()
+		for _d in "${_dtb_raw[@]}"; do
+			[[ "${_d}" == "${_hint}" ]] && _hit2+=("${_d}")
+		done
+		if [[ ${#_hit2[@]} -eq 1 ]]; then
+			display_alert "DTB filter: 板名匹配不唯一，改用 BOOT_FDT_FILE=${_hint} 定唯一份" "${EXTENSION}" "info"
+			_dtb_hit=("${_hit2[@]}")
+		fi
+	fi
 	if [[ ${#_dtb_hit[@]} -ne 1 ]]; then
 		display_alert "DTB filter: BOARD=${board_name} 命中 ${#_dtb_hit[@]} 个 dtb（${_dtb_hit[*]:-无}），无法唯一确定" \
 			"${EXTENSION}" "warn"
-		display_alert "DTB filter: 安全优先，本次【不删除】任何 dtb（保留全部 ${#_dtb_all[@]} 个）" "${EXTENSION}" "warn"
+		display_alert "DTB filter: 安全优先，本次【不删除】任何 dtb（保留全部 ${#_dtb_raw[@]} 个）" "${EXTENSION}" "warn"
 		return 0
 	fi
 	board_dtb="${_dtb_hit[0]}"
@@ -243,8 +294,8 @@ _rk_cn_filter_dtb() {
 
 	display_alert "DTB filter: BOARD=${board_name} 保留 ${board_dtb}，dtbo 前缀=${chip_prefix:-<全部>}" "${EXTENSION}" "info"
 
-	# 4) 清理非本板 dtb
-	find "${dtb_dir}" -maxdepth 1 -type f -name '*.dtb' ! -name "${board_dtb}" -exec rm -f {} \; 2>/dev/null || true
+	# 4) 清理非本板 dtb（板级保留名单一并留下）
+	find "${dtb_dir}" -maxdepth 1 -type f -name '*.dtb' ! -name "${board_dtb}" ${_keep_args[@]+"${_keep_args[@]}"} -exec rm -f {} \; 2>/dev/null || true
 
 	# 5) 清理非本平台 dtbo（保留 EXTRA_DTBO）
 	if [[ -n "${chip_prefix}" && -d "${overlay_dir}" ]]; then
@@ -255,13 +306,13 @@ _rk_cn_filter_dtb() {
 	# 6) 若 /boot/dtb 是符号链接指向 /usr/lib/linux-image-*/rockchip，同步清理实体目录
 	for f in "${SDCARD}"/usr/lib/linux-image-*/rockchip; do
 		[[ -d "${f}" ]] || continue
-		find "${f}" -maxdepth 1 -type f -name '*.dtb' ! -name "${board_dtb}" -exec rm -f {} \; 2>/dev/null || true
+		find "${f}" -maxdepth 1 -type f -name '*.dtb' ! -name "${board_dtb}" ${_keep_args[@]+"${_keep_args[@]}"} -exec rm -f {} \; 2>/dev/null || true
 		if [[ -n "${chip_prefix}" && -d "${f}/overlay" ]]; then
 			find "${f}/overlay" -maxdepth 1 -type f -name '*.dtbo' \
 				! -name "${chip_prefix}-*" ! -name "${extra_dtbo}" -exec rm -f {} \; 2>/dev/null || true
 		fi
 	done
 
-	display_alert "DTB filter: 完成（保留 ${board_dtb} / ${chip_prefix:-*}-*.dtbo / ${extra_dtbo}）" "${EXTENSION}" "info"
+	display_alert "DTB filter: 完成（保留 ${board_dtb}${keep_note} / ${chip_prefix:-*}-*.dtbo / ${extra_dtbo}）" "${EXTENSION}" "info"
 	return 0
 }

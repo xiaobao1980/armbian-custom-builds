@@ -2,11 +2,12 @@ diff --git a/arch/arm64/boot/dts/rockchip/Makefile b/arch/arm64/boot/dts/rockchi
 index cb9067aa7526..678b5710cdbe 100644
 --- a/arch/arm64/boot/dts/rockchip/Makefile
 +++ b/arch/arm64/boot/dts/rockchip/Makefile
-@@ -521,6 +521,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-radxa-e25.dtb
+@@ -521,6 +521,8 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-radxa-e25.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-rock-3a.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-swan1-w28.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-yy3568.dtb
 +dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-neardi-lz120-linux.dtb
++dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-neardi-lz120-linux-hdmi1.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-100ask-dshanpi-a1.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-armsom-cm5-io.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-armsom-cm5-rpi-cm4-io.dtb
@@ -1630,3 +1631,29 @@ index cb9067aa7526..678b5710cdbe 100644
 +};
 +
 +
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/rk3568-neardi-lz120-linux-hdmi1.dts
+@@ -0,0 +1,23 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Neardi LZ120 单屏变体：只留原生 HDMI（丝印 Tx1，dw-hdmi @fe0a0000，走 vp0）。
++ *
++ * 基础那份 rk3568-neardi-lz120-linux.dts 同时开 Tx1 与 Tx2（DSI -> LT8912）。Tx2 的
++ * LT8912 桥既没 EDID 也没 HPD，DRM 因此恒报 card0-DSI-1 connected 1920x1080（驱动内部
++ * 实际锁 720P，两边还不一致），GNOME「显示器」里就永远多一条点不动的幽灵屏。
++ * 想在软件侧关掉它走不通：xrandr / GNOME 关 DSI 会让 VOP2 软硬状态分叉、两屏一起全黑
++ * （2026-11-24 在 r27 出厂镜像实测）。唯一干净的办法是让内核根本不注册这条输出。
++ *
++ * 要接 Tx2：把 /boot/armbianEnv.txt 的 fdtfile 改回 rk3568-neardi-lz120-linux.dtb
++ * 重启即可，不用重烧镜像。
++ */
++
++#include "rk3568-neardi-lz120-linux.dts"
++
++/* 三处都得关：route_dsi0 决定 DRM 给不给这条通路建 CRTC 输出，dsi0 是 host，lt8912 是
++ * 桥驱动；少关一个仍会留下幽灵输出或驱动报错。与「直接 fdtput 产物 dtb」等效已验：
++ * 两份 dtb 反编译 diff 恰好只有下面这三行 status。
++ */
++&route_dsi0 { status = "disabled"; };
++&dsi0       { status = "disabled"; };
++&lt8912     { status = "disabled"; };
