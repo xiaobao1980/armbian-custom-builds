@@ -23,7 +23,7 @@ diff --git a/drivers/gpu/drm/bridge/lt8912.c b/drivers/gpu/drm/bridge/lt8912.c
  
  
  #if HDMI_MODE_720P_TEST_MODE
-@@ -644,28 +648,64 @@
+@@ -644,28 +648,102 @@
  	
  }
  EXPORT_SYMBOL_GPL(lt8912_enable);
@@ -54,6 +54,23 @@ diff --git a/drivers/gpu/drm/bridge/lt8912.c b/drivers/gpu/drm/bridge/lt8912.c
 + * Tx2 插显示器读到 0xfc、拔掉读到 0x00，可靠；dts 里的 irq-gpio(gpio2_C5)
 + * 两种状态都恒高，不能当判据。
 + */
++
++/*
++ * 插入时用哪一套动作。三档对应三个还活着的假设，出厂默认 1（= 0004 v2 的行为）：
++ *   0 = 拔出、插入都不碰芯片，只改 hpd_state 并发 hotplug。理由是冷启动不抖的那台
++ *       芯片从头到尾只被 probe 初始化过一次，热插这条线如果也不动它，就最接近冷启动。
++ *   1 = 拔出写 standby_cfg；插入 rst 拉低 100ms 释放、等满 1s、补 0x09/0x0b、enable(1)。
++ *   2 = 与 1 同，只是复位前再把 pwr_gpio 断一次电重上电，逐字复刻 probe 的上电顺序
++ *       （含 get_chipid）。r30 实测：档位 1 已经不报 wr err 却仍抖，剩下两条最可疑的
++ *       是 standby_cfg 里那几个 enable(1) 的表从不写回的寄存器（0x30/0x34/0x35/0x36/
++ *       0x54/0x5c）留了残留，以及 rst 脚不是全域复位。
++ * 改完档位要做一次完整的「拔 → 等 10s 以上 → 插」才会走到新档位；换档本身不动芯片状态。
++ */
++static int hpd_wake_action = 1;
++module_param(hpd_wake_action, int, 0644);
++MODULE_PARM_DESC(hpd_wake_action,
++	"Tx2 热插唤醒动作：0=只发事件不动芯片 1=复位后起流(出厂) 2=断电重上电后起流");
++
  static int lt8912_hpd_status(void *data)
  {
  	int connected = 0;
@@ -68,28 +85,53 @@ diff --git a/drivers/gpu/drm/bridge/lt8912.c b/drivers/gpu/drm/bridge/lt8912.c
  		connected = (rev0 & BIT(7));
 -		printk("%s:connected = %d,\n",__FUNCTION__, connected);
 -		if((connected > 0) &&(glt8912->hpd_state == false)){
+-			gpio_direction_output(glt8912->rst_gpio, 0);
+-			msleep(1000);
+-			gpio_direction_output(glt8912->rst_gpio, 1);
+-			lt8912_enable(1);
 +
 +		if ((connected > 0) && (glt8912->hpd_state == false)) {
-+			/* 逐拍照抄 probe 的冷启动时序：rst 拉低 100ms 后释放，再等满 1s 才碰
-+			 * 寄存器（厂商原来这里 0 等待，实测第一笔写就 NACK、画面末段抖动），
-+			 * 然后补上 probe 里那两笔 HPD 相关写，最后 enable(1) 起流。 */
- 			gpio_direction_output(glt8912->rst_gpio, 0);
--			msleep(1000);
-+			msleep(100);
- 			gpio_direction_output(glt8912->rst_gpio, 1);
-+			msleep(1000);
-+			lt8912_write(glt8912, I2C_ADDR_MAIN, 0x09, 0xff);
-+			lt8912_write(glt8912, I2C_ADDR_MAIN, 0x0b, 0x7c);
- 			lt8912_enable(1);
++			switch (hpd_wake_action) {
++			case 0:
++				pr_info("lt8912: Tx2 接入显示器，档位 0：不碰芯片，只发事件\n");
++				break;
++			case 2:
++				/* 断电重上电的脉宽照 lt8912_gpio_configure() 上电那一套。 */
++				gpio_direction_output(glt8912->pwr_gpio, 0);
++				msleep(100);
++				gpio_direction_output(glt8912->pwr_gpio, 1);
++				msleep(100);
++				gpio_direction_output(glt8912->rst_gpio, 0);
++				msleep(100);
++				gpio_direction_output(glt8912->rst_gpio, 1);
++				msleep(1000);
++				lt8912_get_chipid(glt8912);
++				lt8912_write(glt8912, I2C_ADDR_MAIN, 0x09, 0xff);
++				lt8912_write(glt8912, I2C_ADDR_MAIN, 0x0b, 0x7c);
++				lt8912_enable(1);
++				pr_info("lt8912: Tx2 接入显示器，档位 2：断电重上电后重新起流\n");
++				break;
++			default:
++				gpio_direction_output(glt8912->rst_gpio, 0);
++				msleep(100);
++				gpio_direction_output(glt8912->rst_gpio, 1);
++				msleep(1000);
++				lt8912_write(glt8912, I2C_ADDR_MAIN, 0x09, 0xff);
++				lt8912_write(glt8912, I2C_ADDR_MAIN, 0x0b, 0x7c);
++				lt8912_enable(1);
++				pr_info("lt8912: Tx2 接入显示器，档位 1：按冷启动时序复位起流\n");
++				break;
++			}
  			glt8912->hpd_state = true;
 -		}else if((connected == 0) && (glt8912->hpd_state == true)){
-+			pr_info("lt8912: Tx2 接入显示器，按冷启动时序重新起流\n");
+-			lt8912_enable(0);
 +			if (lt8912_drm_dev)
 +				drm_kms_helper_hotplug_event(lt8912_drm_dev);
 +		} else if ((connected == 0) && (glt8912->hpd_state == true)) {
- 			lt8912_enable(0);
++			if (hpd_wake_action != 0)
++				lt8912_enable(0);
  			glt8912->hpd_state = false;
-+			pr_info("lt8912: Tx2 显示器拔下，停止输出\n");
++			pr_info("lt8912: Tx2 显示器拔下，停止输出（当前档位 %d）\n", hpd_wake_action);
 +			if (lt8912_drm_dev)
 +				drm_kms_helper_hotplug_event(lt8912_drm_dev);
  		}

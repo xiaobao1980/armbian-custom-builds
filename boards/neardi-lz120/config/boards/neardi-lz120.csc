@@ -526,17 +526,34 @@ function post_family_tweaks__lz120_bluetooth() {
 # 的 bool 符号，只有本板 lz120-kernel-config 会置 y —— 同 family 的 h96s / cm3588-nas /
 # rock-5-itx / am60-sa12 编出来的代码与改动前逐字节相同。
 #   · lt8912.c：打开厂商留在那儿没编的 LT8912_HDP_CHECK（原样 //#define），1s 轮询 0xC1
-#     bit7；插入 → 按 probe 冷启动那一套时序复位桥再起流（rst 拉低 100ms → 释放 → 等满 1s
-#     → 补上 probe 里那两笔 0x09=0xff / 0x0b=0x7c → lt8912_enable(1)），拔出 →
-#     lt8912_enable(0) 停输出；跳变后 drm_kms_helper_hotplug_event() 通知桌面，顺手去掉原来
-#     每秒一行的 printk。另导出 lt8912_get_hpd()（1 = 有接收端 / 0 = 没有 / -ENODEV = 本板
-#     没这颗桥）与 lt8912_bind_drm()（把 ddev 交给桥去发事件）。
-#     ⚠️ 「复位释放后 0 等待就直接 enable」是厂商原件的写法，也是 v1 的写法，实测会在第一笔
-#     寄存器写就 NACK（dmesg `wr err: reg 0xb2`）并让画面末段抖动 —— 唤醒路径必须与冷启动逐拍
-#     一致，不能只抄个复位外形。
+#     bit7；跳变后 drm_kms_helper_hotplug_event() 通知桌面，顺手去掉原来每秒一行的 printk。
+#     另导出 lt8912_get_hpd()（1 = 有接收端 / 0 = 没有 / -ENODEV = 本板没这颗桥）与
+#     lt8912_bind_drm()（把 ddev 交给桥去发事件）。
+#     插入时到底动芯片哪几步，由 module_param(hpd_wake_action, int, 0644) 决定，built-in（=y）
+#     的代码也会落在 /sys/module/lt8912/parameters/hpd_wake_action，换档后要走一次完整的
+#     「拔 → 等 10s 以上 → 插」才生效（换档本身不动芯片状态）：
+#       1 = 出厂默认，也是 0004 v2 的行为：拔出写 standby_cfg；插入 rst 拉低 100ms → 释放
+#           → 等满 1s → 补 probe 里那两笔 0x09=0xff / 0x0b=0x7c → lt8912_enable(1) 起流。
+#       0 = 拔出、插入都不碰芯片寄存器，只翻 hpd_state 发事件 —— 冷启动那台芯片从头到尾只被
+#           probe 初始化过一次，这一档就是让热插也停在同一个状态上。
+#       2 = 与 1 同，只是复位前先把 pwr_gpio 断一次电重上电，并按 probe 补一次 get_chipid。
 #   · dw-mipi-dsi.c：detect() 在问不到 bridge 时改问 lt8912_get_hpd()；connector_init()
 #     补 polled = POLL_CONNECT|POLL_DISCONNECT，兜「hotplug 事件早于 DRM 绑定」那一档
 #     （rockchip_drm_drv.c 里确实调了 drm_kms_helper_poll_init，轮询才会真的跑）。
+# ⚠️ 热插唤醒后 Tx2 画面底部抖（冷启动两路都接不抖）—— 到 r30 为止的结论，中间假设别当定论：
+#   1) 「厂商唤醒路径复位释放后 0 等待就写寄存器 → 第一笔 0xb2 NACK → 抖」这条**已证伪**：v2
+#      把节拍逐字对齐 probe，r30 板上复测 dmesg 里 wr err 不再出现、画面照抖。
+#   2) 一并排除的：vp1 像素时钟（冷启动与唤醒两次 commit 都是 `set dclk_vop1 to 148500000,
+#      get 148500000`、DSI 带宽同为 996 x 4 Mbps，整场 vp1 只切换过 2 次模式）；桌面侧重排
+#      （journalctl -t lz120-display 只有登录那一条，插拔那几十秒 hook 没动布局）。
+#   3) 现在最可疑的一处不对称：拔出写的 standby_cfg 里有 6 笔寄存器是 enable(1) 那张 init 表
+#      **从不写回**的 —— 0x54=0x1d、0x5c=0x11、0x30=0x08、0x34/0x35/0x36=0x00（比对 lt8912.c
+#      两张表得出，2026-11-24）。冷启动那台从没进过 standby，热插这台带着残留；如果 rst 脚不是
+#      全域复位，「冷启动不抖、热插抖」就说得通。上面档位 0 与 2 就是冲这条设计的对照。
+#   4) 板上还能自己判的三件事：① 抖动是持续的还是十几秒后自愈；② 连拔插 2~3 次是越来越糟
+#      （支持残留假设）还是一样；③ 换档重测后哪一档不抖。注意「在显示设置里切分辨率再切回」
+#      这条路走不通 —— DSI 那路的模式表来自 dts 的 panel 节点，只有 1920x1080 一条，GNOME
+#      里改不动；关开 Tx2 更是别试，运行态关 DSI 会让 VOP2 软硬状态分叉、两屏全黑。
 # ⚠️ 「Tx2 在系统设置里顶着『内置显示器』还排第一」这条**没跟着本轮改**，评估结论记在这儿：
 # 标签只由 connector_type 决定（mutter 把 DSI/LVDS/eDP 归 is-builtin），要改只能把连接器类型
 # 报成 DRM_MODE_CONNECTOR_HDMIA。但厂商 VOP2 的 vop2_crtc_mode_fixup() 会遍历本次 atomic
@@ -549,14 +566,16 @@ function post_family_tweaks__lz120_bluetooth() {
 # 含两路都无 EDID 时不动布局的退化分支）。
 # 结论：这条单独一轮做 —— 先量它对 vp1 dclk 与画面的实际影响，别和抖动修复混在同一轮里。
 # 实测（r29 出厂镜像，207 板，双屏 dtb）：Tx2 没接 → card0-DSI-1/status = disconnected；
-# 接上 → 线程复位重新起流并发 hotplug → status = connected、桌面自己长出第二条，主屏仍是
-# 原生 Tx1（上面 hook 保证原点与主屏）。冷启动两路都接：不抖。
+# 接上 → 线程重新起流并发 hotplug → status = connected、桌面自己长出第二条，主屏仍是原生 Tx1
+# （上面 hook 保证原点与主屏）。冷启动两路都接：不抖。
+# 实测（r30，v2 冷启动同拍时序）：插拔判定与 r29 一致、wr err 消失，但热插唤醒后**仍抖** →
+# 上面第 1) 条证伪，按第 3) 条的档位对照继续查。
 # 延迟量级 = 1s 轮询 + 复位脉宽 0.1s + 释放后等待 1s + 显示器自己同步 ≈ 2~3s。
 # ⚠️ 出厂默认按上面这套走双屏那份（顶部 BOOT_FDT_FILE 指 ...-linux.dtb，与厂商件同值）。
-#   v1（复位释放后 0 等待就写寄存器）在热插唤醒后出现 Tx2 画面底部抖动，v2 改成冷启动同拍。
-#   这一轮镜像只验一件事：**拔掉 Tx2 再插回，出图之后画面末段不抖**（冷启动已确认不抖；布局与
-#   主屏归属这轮没动代码，沿 r29 的结论）。
-#   出问题不必重烧，退回单屏那份即可（改板上 fdtfile 重启），或按上面第 0) 条注释改 .csc
+#   r31 这一轮要验的是：三个档位下「拔掉再插回，出图之后画面末段抖不抖」。判据看 dmesg 里那句
+#   `lt8912: Tx2 接入显示器，档位 N：…`，同一台机器换档各测一次就够，不用重烧；哪一档不抖，
+#   就把出厂默认从 1 改成哪一档（改 hpd_wake_action 的初值，重出一轮）。
+#   真出问题也不必重烧：退回单屏那份即可（改板上 fdtfile 重启），或按上面第 0) 条注释改 .csc
 #   两行重出镜像。
 # 单屏 dtb 下 0004 是惰性的：lt8912 节点 disabled → 驱动不 probe → lt8912_get_hpd() 回
 # -ENODEV → detect 走原分支，行为与没打补丁完全一致。
