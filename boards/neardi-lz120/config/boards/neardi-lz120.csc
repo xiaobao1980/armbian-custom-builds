@@ -526,20 +526,37 @@ function post_family_tweaks__lz120_bluetooth() {
 # 的 bool 符号，只有本板 lz120-kernel-config 会置 y —— 同 family 的 h96s / cm3588-nas /
 # rock-5-itx / am60-sa12 编出来的代码与改动前逐字节相同。
 #   · lt8912.c：打开厂商留在那儿没编的 LT8912_HDP_CHECK（原样 //#define），1s 轮询 0xC1
-#     bit7；插入 → 复位桥 + lt8912_enable(1) 重新起流，拔出 → lt8912_enable(0) 停输出；
-#     跳变后 drm_kms_helper_hotplug_event() 通知桌面，顺手去掉原来每秒一行的 printk。
-#     另导出 lt8912_get_hpd()（1 = 有接收端 / 0 = 没有 / -ENODEV = 本板没这颗桥）与
-#     lt8912_bind_drm()（把 ddev 交给桥去发事件）。
+#     bit7；插入 → 按 probe 冷启动那一套时序复位桥再起流（rst 拉低 100ms → 释放 → 等满 1s
+#     → 补上 probe 里那两笔 0x09=0xff / 0x0b=0x7c → lt8912_enable(1)），拔出 →
+#     lt8912_enable(0) 停输出；跳变后 drm_kms_helper_hotplug_event() 通知桌面，顺手去掉原来
+#     每秒一行的 printk。另导出 lt8912_get_hpd()（1 = 有接收端 / 0 = 没有 / -ENODEV = 本板
+#     没这颗桥）与 lt8912_bind_drm()（把 ddev 交给桥去发事件）。
+#     ⚠️ 「复位释放后 0 等待就直接 enable」是厂商原件的写法，也是 v1 的写法，实测会在第一笔
+#     寄存器写就 NACK（dmesg `wr err: reg 0xb2`）并让画面末段抖动 —— 唤醒路径必须与冷启动逐拍
+#     一致，不能只抄个复位外形。
 #   · dw-mipi-dsi.c：detect() 在问不到 bridge 时改问 lt8912_get_hpd()；connector_init()
 #     补 polled = POLL_CONNECT|POLL_DISCONNECT，兜「hotplug 事件早于 DRM 绑定」那一档
 #     （rockchip_drm_drv.c 里确实调了 drm_kms_helper_poll_init，轮询才会真的跑）。
-# 预期（双屏 dtb 下）：Tx2 没接 → DRM 报 disconnected → 桌面只有一条屏；接上 → 轮询线程
-# 复位重新起流并发 hotplug → 桌面加回第二条，主屏仍是原生 Tx1（上面 hook 保证原点与主屏）。
-# 延迟量级 = 1s 轮询 + 桥复位 1s + 显示器自己同步，出厂镜像上再实测填数。
-# ⚠️ 出厂默认已按上面这套翻回双屏那份（顶部 BOOT_FDT_FILE 指 ...-linux.dtb，与厂商件同值）。
-#   判据本身在 207 板上实测过（0xfc/0x00），但**整条 0004 的端到端行为还没在出厂镜像上跑过
-#   一轮插拔**：r28 之后那轮带 0004 的镜像出来，第一件事就是接/拔 Tx2 看 card0-DSI-1/status
-#   与 GNOME 显示器数量。出问题不必重烧，退回单屏那份即可（改板上 fdtfile 重启），或按上面
-#   第 0) 条注释改 .csc 两行重出镜像。
+# ⚠️ 「Tx2 在系统设置里顶着『内置显示器』还排第一」这条**没跟着本轮改**，评估结论记在这儿：
+# 标签只由 connector_type 决定（mutter 把 DSI/LVDS/eDP 归 is-builtin），要改只能把连接器类型
+# 报成 DRM_MODE_CONNECTOR_HDMIA。但厂商 VOP2 的 vop2_crtc_mode_fixup() 会遍历本次 atomic
+# state 里的连接器，命中 DisplayPort/HDMIA 就**直接 return**，跳过下面那笔
+# rockchip_drm_dclk_round_rate() 像素时钟取整（源码 kernel-6.1
+# drivers/gpu/drm/rockchip/rockchip_drm_vop2.c:8207-8212，2026-11-24 在 198 源码机上核对）——
+# 也就是说报成 HDMI 等于给 vp1（桥那路）换一条时钟路径，不是纯改名。另一个连带代价是连接器
+# 名从 DSI-1 变成 HDMI-A-<n>（谁占 1 号看注册顺序），上面那个布局脚本里十几处 HDMI-1/DSI-1
+# 全得换成「按读不读得到 EDID 认路 + 从 sysfs 目录名现推桌面名」（改法与假 sysfs 单测已做，
+# 含两路都无 EDID 时不动布局的退化分支）。
+# 结论：这条单独一轮做 —— 先量它对 vp1 dclk 与画面的实际影响，别和抖动修复混在同一轮里。
+# 实测（r29 出厂镜像，207 板，双屏 dtb）：Tx2 没接 → card0-DSI-1/status = disconnected；
+# 接上 → 线程复位重新起流并发 hotplug → status = connected、桌面自己长出第二条，主屏仍是
+# 原生 Tx1（上面 hook 保证原点与主屏）。冷启动两路都接：不抖。
+# 延迟量级 = 1s 轮询 + 复位脉宽 0.1s + 释放后等待 1s + 显示器自己同步 ≈ 2~3s。
+# ⚠️ 出厂默认按上面这套走双屏那份（顶部 BOOT_FDT_FILE 指 ...-linux.dtb，与厂商件同值）。
+#   v1（复位释放后 0 等待就写寄存器）在热插唤醒后出现 Tx2 画面底部抖动，v2 改成冷启动同拍。
+#   这一轮镜像只验一件事：**拔掉 Tx2 再插回，出图之后画面末段不抖**（冷启动已确认不抖；布局与
+#   主屏归属这轮没动代码，沿 r29 的结论）。
+#   出问题不必重烧，退回单屏那份即可（改板上 fdtfile 重启），或按上面第 0) 条注释改 .csc
+#   两行重出镜像。
 # 单屏 dtb 下 0004 是惰性的：lt8912 节点 disabled → 驱动不 probe → lt8912_get_hpd() 回
 # -ENODEV → detect 走原分支，行为与没打补丁完全一致。

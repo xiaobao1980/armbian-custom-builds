@@ -23,7 +23,7 @@ diff --git a/drivers/gpu/drm/bridge/lt8912.c b/drivers/gpu/drm/bridge/lt8912.c
  
  
  #if HDMI_MODE_720P_TEST_MODE
-@@ -644,28 +648,58 @@
+@@ -644,28 +648,64 @@
  	
  }
  EXPORT_SYMBOL_GPL(lt8912_enable);
@@ -41,13 +41,13 @@ diff --git a/drivers/gpu/drm/bridge/lt8912.c b/drivers/gpu/drm/bridge/lt8912.c
 +	return glt8912->hpd_state ? 1 : 0;
 +}
 +EXPORT_SYMBOL_GPL(lt8912_get_hpd);
-+
+ 
 +void lt8912_bind_drm(struct drm_device *dev)
 +{
 +	lt8912_drm_dev = dev;
 +}
 +EXPORT_SYMBOL_GPL(lt8912_bind_drm);
- 
++
  #ifdef 	LT8912_HDP_CHECK
 +/*
 + * 判据 = 0xC1 bit7（桥 HDMI 侧接收端的 5V/HPD）。2026-11-24 在 207 板实测：
@@ -70,13 +70,20 @@ diff --git a/drivers/gpu/drm/bridge/lt8912.c b/drivers/gpu/drm/bridge/lt8912.c
 -		if((connected > 0) &&(glt8912->hpd_state == false)){
 +
 +		if ((connected > 0) && (glt8912->hpd_state == false)) {
++			/* 逐拍照抄 probe 的冷启动时序：rst 拉低 100ms 后释放，再等满 1s 才碰
++			 * 寄存器（厂商原来这里 0 等待，实测第一笔写就 NACK、画面末段抖动），
++			 * 然后补上 probe 里那两笔 HPD 相关写，最后 enable(1) 起流。 */
  			gpio_direction_output(glt8912->rst_gpio, 0);
- 			msleep(1000);
+-			msleep(1000);
++			msleep(100);
  			gpio_direction_output(glt8912->rst_gpio, 1);
++			msleep(1000);
++			lt8912_write(glt8912, I2C_ADDR_MAIN, 0x09, 0xff);
++			lt8912_write(glt8912, I2C_ADDR_MAIN, 0x0b, 0x7c);
  			lt8912_enable(1);
  			glt8912->hpd_state = true;
 -		}else if((connected == 0) && (glt8912->hpd_state == true)){
-+			pr_info("lt8912: Tx2 接入显示器，重新起流\n");
++			pr_info("lt8912: Tx2 接入显示器，按冷启动时序重新起流\n");
 +			if (lt8912_drm_dev)
 +				drm_kms_helper_hotplug_event(lt8912_drm_dev);
 +		} else if ((connected == 0) && (glt8912->hpd_state == true)) {
