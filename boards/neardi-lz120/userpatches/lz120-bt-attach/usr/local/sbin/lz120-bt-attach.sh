@@ -11,6 +11,9 @@
 #   命令行照抄厂商 external/rkwifibt/scripts/wifibt-init.sh 的 start_bt_rtk_uart()：
 #     rtk_hciattach -n -s 115200 <tty> rtk_h5
 #   固件由 armbian-firmware 提供，工具读固定路径 /lib/firmware/rtlbt/rtl8852bs_{fw,config}。
+#   $TOOL 必须是静态编译的那一枚：厂商预编译件按新 glibc 链（要 GLIBC_2.42），在
+#   noble(2.39)/bookworm(2.36) 上连 exec 都不过，症状只是本脚本报「等不到 hci0」，
+#   看不出根因 —— 重编与验真方法见 .csc「本地追加 5」（2026-11-24 r27 出厂镜像踩过）。
 #
 # 为什么要常驻保活、而不是一次性 attach（2026-11-24 板上实测的两条死法）：
 #   1) patchram 是下载到芯片 RAM 的，**掉一次电就没了**。UI 里关蓝牙再开、
