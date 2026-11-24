@@ -9,9 +9,10 @@
 #   ⚠️ armbian/build 上游**没有**这块板（构建树里 config/boards/neardi-lz120.csc 一直是
 #      未跟踪文件），所以没有 upstream commit 可比、也没有可复制的 diff 命令；
 #      厂商/上游后续改动只能手工回合。
-#   本地追加（3~5 在文件末尾，逐条登记）：
-#     0) 顶部 BOOT_FDT_FILE 改指 rk3568-neardi-lz120-linux-hdmi1.dtb（单屏变体）、
-#        新增 DTB_KEEP_EXTRA 保住双屏那份 —— 与厂商件在这一行起分叉，理由见「本地追加 3」。
+#   本地追加（3~6 在文件末尾，逐条登记）：
+#     0) 厂商件的 BOOT_FDT_FILE 保持原值（双屏那份 rk3568-neardi-lz120-linux.dtb），
+#        紧随其后**新增**一行 DTB_KEEP_EXTRA 保住单屏变体 —— 与厂商件的分叉点在这一行，
+#        理由见「本地追加 3」与「本地追加 6」。
 #     1) ENABLE_EXTENSIONS=verify-boot-env,lz120-kernel-config,audio-friendly-names
 #        —— 已整条删除，唯一来源改为同目录 build.env；原因见文件末尾「本地追加 1」。
 #     2) PACKAGE_LIST_ADDITIONAL 追加 i2c-tools / libdrm-tests
@@ -19,7 +20,7 @@
 #     3) post_family_tweaks__lz120_display_layout（文件末尾）
 #        —— 落盘显示布局脚本 + 开关文件 + autostart/lightdm 两个入口；只在**双屏 dtb**
 #           下把原生 HDMI 定成主屏、LT8912 桥那路挪右侧扩展屏（单屏 dtb 下自然早退）。
-#           出厂默认走单屏 dtb；运行态死路与两份 dtb 的取舍依据见「本地追加 3」。
+#           出厂默认即双屏 dtb；运行态死路与两份 dtb 的取舍依据见「本地追加 3」。
 #     4) post_family_tweaks__lz120_can_quiet（文件末尾）
 #        —— /etc/modprobe.d/99-lz120-can-quiet.conf：CAN 接口保留，只压掉
 #           rk3568_can_get_berr_counter 那行 netdev_dbg 刷屏；依据见「本地追加 4」。
@@ -28,6 +29,10 @@
 #           lz120-bluetooth.service）并 enable。RTL8852BS 的蓝牙在 UART1，内核没有
 #           Realtek 的 UART HCI 协议，不 attach 就永远没有 hci0，GNOME 蓝牙开关点了
 #           也只翻 rfkill 电源；详见「本地追加 5」。
+#     6) userpatches/kernel/rk35xx-vendor-6.1/0004-lz120-lt8912-hpd.patch
+#        —— 打开厂商留着没编的 LT8912_HDP_CHECK，用桥寄存器 0xC1 bit7（接收端 5V/HPD）
+#           驱动 DSI 连接器的 detect + hotplug：双屏 dtb 下 Tx2 不接就不再挂一条幽灵屏。
+#           有了它，出厂默认才敢留在双屏那份；判据实测与回退办法见「本地追加 6」。
 #
 # ── 构建 ────────────────────────────────────────────────────────────────────
 #   ./compile.sh BOARD=neardi-lz120 BRANCH=vendor RELEASE=bookworm BUILD_DESKTOP=no
@@ -42,11 +47,15 @@ BOOTCONFIG="neardi-lz120-rk3568_defconfig"
 KERNEL_TARGET="vendor"
 FULL_DESKTOP="yes"
 BOOT_LOGO="desktop"
-# 出厂默认单屏变体（只留原生 HDMI 丝印 Tx1）；双屏那份留在镜像里，改 fdtfile 即切换。
-# 两份都由 0001-lz120-dts.patch 编出来；DTB_KEEP_EXTRA 告诉 rk35xx-chinese-desktop
-# 的 DTB 过滤器「这两份都是本板的，别删第二份」，详见「本地追加 3」。
-BOOT_FDT_FILE="rockchip/rk3568-neardi-lz120-linux-hdmi1.dtb"
-DTB_KEEP_EXTRA="rk3568-neardi-lz120-linux.dtb"
+# 出厂默认双屏那份（两只 HDMI 座都在，Tx2 按实际插拔增减 —— 0004-lz120-lt8912-hpd.patch）。
+# 这一行与厂商件同值；下面的 DTB_KEEP_EXTRA 才是本板唯一的分叉点：告诉
+# rk35xx-chinese-desktop 的 DTB 过滤器「单屏变体也是本板的，别删」，切回去当兜底用。
+# 两份都由 0001-lz120-dts.patch 编出，详见「本地追加 3」；插拔检测详见「本地追加 6」。
+# ⚠️ 退回「内核根本不注册 Tx2」（比如出厂实测发现 0004 有问题）：把下面这行的文件名换成
+#    rk3568-neardi-lz120-linux-hdmi1.dtb、DTB_KEEP_EXTRA 换成 rk3568-neardi-lz120-linux.dtb，
+#    重出一轮镜像；已烧好的板不用重烧，直接改 /boot/armbianEnv.txt 的 fdtfile 重启即可。
+BOOT_FDT_FILE="rockchip/rk3568-neardi-lz120-linux.dtb"
+DTB_KEEP_EXTRA="rk3568-neardi-lz120-linux-hdmi1.dtb"
 BOOT_SCENARIO="spl-blobs"
 IMAGE_PARTITION_TABLE="gpt"
 
@@ -74,25 +83,29 @@ IMAGE_PARTITION_TABLE="gpt"
 # probing, weston for the second display.
 PACKAGE_LIST_ADDITIONAL="$PACKAGE_LIST_ADDITIONAL i2c-tools libdrm-tests"
 
-# ── 本地追加 3：出厂默认单屏（原生 HDMI 丝印 Tx1），双屏变体保留可随时切 ────────
-# 现象（2026-11-23 在 207 板实测）：DSI→LT8912 桥没有 EDID 也没有 HPD，DRM 恒报
+# ── 本地追加 3：两份 dtb 都出，默认双屏（插拔检测由 0004 负责），单屏那份兜底 ──────
+# 现象（2026-11-23 在 207 板实测，未打 0004 时）：DSI→LT8912 桥没有 EDID 也没有 HPD，DRM 恒报
 # card0-DSI-1 connected 1920x1080（驱动内部实际锁 720P，两边还不一致），于是
 #   · GNOME「显示器」里永远多一条点不动的幽灵屏；
 #   · mutter 把它当 is-builtin（内置屏）优先选成主屏，桌面拼成 3840x1080，
 #     接原生 Tx1 的那台只拿到没有顶栏/面板的「副屏」。
-# 出厂选择（2026-11-24 定案）：**两份 dtb 都出，默认单屏**。
-#   · 默认份 = BOOT_FDT_FILE 指向的 rk3568-neardi-lz120-linux-hdmi1.dtb，由 0001 补丁里
-#     rk3568-neardi-lz120-linux-hdmi1.dts 编出：整份只有「#include 基础那份 + 关掉
-#     route_dsi0 / dsi0 / lt8912 三个节点」。内核不注册这条输出，幽灵屏从源头消失，
-#     不用任何运行态干预。板上用 fdtput 改产物等效验过（DRM 只剩 card0-HDMI-A-1、
-#     lt8912 零探测、桌面正常）；源码级两份 dtb 反编译 diff 恰好只有那三行 status。
-#   · 要接 Tx2：改回另一份并重启，不用重烧镜像 ——
-#     sudo sed -i 's|^fdtfile=.*|fdtfile=rockchip/rk3568-neardi-lz120-linux.dtb|' /boot/armbianEnv.txt
-#     第二份由本文件顶部 DTB_KEEP_EXTRA 保住，否则会被 rk35xx-chinese-desktop 的
-#     DTB 过滤器当「非本板 dtb」删掉（它只保留唯一命中的那份）。
-#   · 用双屏那份时，下面这个 hook 把主屏和原点 (0,0) 换成原生 HDMI-1、桥那路挪到右边，
-#     两路都保持点亮；单屏那份下它按 drm_status 检查自然早退（DSI-1 不存在 → 不动布局）。
+# 出厂选择：**两份 dtb 都出**。2026-11-24 上午先按「内核不注册 Tx2」把默认定成单屏那份；
+# 同一天 0004 让双屏那份能按实际插拔报连接器状态之后，默认翻回双屏那份（详见「本地追加 6」），
+# 单屏那份保留为兜底。
+#   · 双屏份 = rk3568-neardi-lz120-linux.dtb（厂商 dts 原样，两只座子都在）。
+#   · 单屏份 = rk3568-neardi-lz120-linux-hdmi1.dtb，由 0001 补丁里同名 .dts 编出：整份只有
+#     「#include 基础那份 + 关掉 route_dsi0 / dsi0 / lt8912 三个节点」。内核不注册这条输出，
+#     幽灵屏从源头消失，不用任何运行态干预。板上用 fdtput 改产物等效验过（DRM 只剩
+#     card0-HDMI-A-1、lt8912 零探测、桌面正常）；源码级两份 dtb 反编译 diff 恰好只有那三行 status。
+#   · 两份都在镜像里：默认那份由顶部 BOOT_FDT_FILE 定，另一份由 DTB_KEEP_EXTRA 保住 —— 否则会被
+#     rk35xx-chinese-desktop 的 DTB 过滤器当「非本板 dtb」删掉（它只保留唯一命中的那份）。
+#     已烧好的板换那份不用重烧，改 fdtfile 重启即可，例如退回单屏：
+#     sudo sed -i 's|^fdtfile=.*|fdtfile=rockchip/rk3568-neardi-lz120-linux-hdmi1.dtb|' /boot/armbianEnv.txt
+#   · 双屏那份下，下面这个 hook 把主屏和原点 (0,0) 换成原生 HDMI-1、桥那路挪到右边，两路都保持
+#     点亮；单屏那份下它按 drm_status 检查自然早退（DSI-1 不存在 → 不动布局）。
 #     只想停掉本逻辑：/etc/default/lz120-display 写 LZ120_NATIVE_HDMI_PRIMARY=0。
+#     （2026-11-24 补：0004 让双屏那份下的 DSI-1 会随实际插拔 connected/disconnected，
+#      hook 的 drm_status 判据因此真正有意义了 —— 没接 Tx2 时它早退，桌面只剩一条屏。）
 # ⚠️ 别在**运行期**关 DSI（xrandr --off、GNOME 显示器设置里关掉都一样）：GetCurrentState 里
 #   DSI-1 确实没了 is-current，但 /sys/kernel/debug/dri/0/state 里它仍挂着 video_port1，
 #   软硬状态分叉，gnome-shell 从此刻起持续刷 `Page flip failed: drmModeAtomicCommit:
@@ -164,9 +177,9 @@ log() { logger -t lz120-display "$*" 2>/dev/null || true; }
 drm_status() { cat "/sys/class/drm/card0-$1/status" 2>/dev/null || true; }
 
 # 原生 HDMI 没接线，或桥那路不存在 → 没有可交换的对象，一律不动
-# （DSI-1 不存在 = 出厂默认的单屏 dtb rk3568-neardi-lz120-linux-hdmi1.dtb，本来就该跳过）
+# （DSI-1 非 connected 有两种：单屏兜底那份里节点被 disabled；双屏那份 + 0004 下 Tx2 没接显示器）
 [ "$(drm_status HDMI-A-1)" = "connected" ] || exit 0
-[ "$(drm_status DSI-1)" = "connected" ] || { log "没有 DSI-1（单屏 dtb），布局不动"; exit 0; }
+[ "$(drm_status DSI-1)" = "connected" ] || { log "DSI-1 不可用（单屏 dtb 或 Tx2 没接），布局不动"; exit 0; }
 
 stype="${XDG_SESSION_TYPE:-}"
 if [[ -z "$stype" ]]; then
@@ -496,3 +509,37 @@ function post_family_tweaks__lz120_bluetooth() {
 	display_alert "Extension: ${BOARD}" "RTL8852BS 蓝牙 attach 已部署并 enable（rtk_hciattach /dev/ttyS1，开机建 hci0）" "info"
 	return 0
 }
+
+# ── 本地追加 6：Tx2 插拔检测（0004-lz120-lt8912-hpd.patch）───────────────────
+# 「没插显示器的 Tx2 也挂在系统设置里」是链路性质，不是配置能拧的：DSI→LT8912 在 DRM 里
+# 算「面板」而不是可探测的连接器 —— dw_mipi_dsi_connector_detect() 只在 next_bridge 带
+# DRM_BRIDGE_OP_DETECT 时才往下问，而本板那颗桥是纯 i2c 器件（0002 引进的厂商驱动），
+# 不在 bridge 链上，于是 detect 恒返回 connected；连接器又没有 polled 标志，注册之后
+# 再也不重探。所以运行态怎么设置都去不掉那条屏（见「本地追加 3」的运行态死路）。
+# 判据实测（2026-11-24，207 板，双屏 dtb，i2c-4 = fe5d0000，桥 0x48）：
+#   · 0xC1 bit7 = 接收端 5V/HPD：Tx2 插着显示器读 0xfc、拔线后读 0x00 —— 可靠，本补丁用它。
+#   · dts 里的 irq-gpio（gpio2_C5，板上 gpio-85 lt8912b_irq）插拔两种状态都恒高，不能当
+#     判据；厂商驱动也只 gpio_request + gpio_to_irq，压根没 request_irq。
+#   · i2c-4 上 0x50 读不到 EDID（Error: Read failed）：桥的 DDC 没透出到 SoC，所以模式
+#     仍只能取 dts 里那份 1080p timing，本补丁不碰 EDID（720P/1080p 那处不一致也照旧）。
+# 0004 改两处，都用 IS_ENABLED(CONFIG_DRM_LONTIUM_LT8912) 圈住；那颗 Kconfig 是 0002 新增
+# 的 bool 符号，只有本板 lz120-kernel-config 会置 y —— 同 family 的 h96s / cm3588-nas /
+# rock-5-itx / am60-sa12 编出来的代码与改动前逐字节相同。
+#   · lt8912.c：打开厂商留在那儿没编的 LT8912_HDP_CHECK（原样 //#define），1s 轮询 0xC1
+#     bit7；插入 → 复位桥 + lt8912_enable(1) 重新起流，拔出 → lt8912_enable(0) 停输出；
+#     跳变后 drm_kms_helper_hotplug_event() 通知桌面，顺手去掉原来每秒一行的 printk。
+#     另导出 lt8912_get_hpd()（1 = 有接收端 / 0 = 没有 / -ENODEV = 本板没这颗桥）与
+#     lt8912_bind_drm()（把 ddev 交给桥去发事件）。
+#   · dw-mipi-dsi.c：detect() 在问不到 bridge 时改问 lt8912_get_hpd()；connector_init()
+#     补 polled = POLL_CONNECT|POLL_DISCONNECT，兜「hotplug 事件早于 DRM 绑定」那一档
+#     （rockchip_drm_drv.c 里确实调了 drm_kms_helper_poll_init，轮询才会真的跑）。
+# 预期（双屏 dtb 下）：Tx2 没接 → DRM 报 disconnected → 桌面只有一条屏；接上 → 轮询线程
+# 复位重新起流并发 hotplug → 桌面加回第二条，主屏仍是原生 Tx1（上面 hook 保证原点与主屏）。
+# 延迟量级 = 1s 轮询 + 桥复位 1s + 显示器自己同步，出厂镜像上再实测填数。
+# ⚠️ 出厂默认已按上面这套翻回双屏那份（顶部 BOOT_FDT_FILE 指 ...-linux.dtb，与厂商件同值）。
+#   判据本身在 207 板上实测过（0xfc/0x00），但**整条 0004 的端到端行为还没在出厂镜像上跑过
+#   一轮插拔**：r28 之后那轮带 0004 的镜像出来，第一件事就是接/拔 Tx2 看 card0-DSI-1/status
+#   与 GNOME 显示器数量。出问题不必重烧，退回单屏那份即可（改板上 fdtfile 重启），或按上面
+#   第 0) 条注释改 .csc 两行重出镜像。
+# 单屏 dtb 下 0004 是惰性的：lt8912 节点 disabled → 驱动不 probe → lt8912_get_hpd() 回
+# -ENODEV → detect 走原分支，行为与没打补丁完全一致。

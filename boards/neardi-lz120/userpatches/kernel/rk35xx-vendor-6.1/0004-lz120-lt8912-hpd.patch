@@ -1,0 +1,143 @@
+diff --git a/drivers/gpu/drm/bridge/lt8912.c b/drivers/gpu/drm/bridge/lt8912.c
+--- a/drivers/gpu/drm/bridge/lt8912.c
++++ b/drivers/gpu/drm/bridge/lt8912.c
+@@ -30,9 +30,11 @@
+ #include <linux/jiffies.h>
+ #include <linux/timer.h>
+ #include <linux/kthread.h>
++#include <drm/drm_device.h>
++#include <drm/drm_probe_helper.h>
+  
+ #define EDID_ADDR 0x50
+-//#define LT8912_HDP_CHECK 0
++#define LT8912_HDP_CHECK 1
+ #define LT8912_REG_CHIP_REVISION_0 (0x00)
+ #define LT8912_REG_CHIP_REVISION_1 (0x01)
+  
+@@ -75,6 +77,8 @@
+ 	struct i2c_client *i2c_client;
+ };
+  static struct lt8912 *glt8912;
++/* 由 dw-mipi-dsi 建连接器时回填，插拔跳变后用它发 hotplug 事件 */
++static struct drm_device *lt8912_drm_dev;
+ 
+ 
+ #if HDMI_MODE_720P_TEST_MODE
+@@ -644,28 +648,58 @@
+ 	
+ }
+ EXPORT_SYMBOL_GPL(lt8912_enable);
++
++
++/*
++ * 给 DRM 侧用：1 = Tx2 有接收端，0 = 没有，-ENODEV = 本板没这颗桥（探测失败）。
++ * 调用方拿到 -ENODEV 时不要改动连接器状态，维持"恒 connected"的原行为。
++ */
++int lt8912_get_hpd(void)
++{
++	if (!glt8912)
++		return -ENODEV;
+ 
++	return glt8912->hpd_state ? 1 : 0;
++}
++EXPORT_SYMBOL_GPL(lt8912_get_hpd);
++
++void lt8912_bind_drm(struct drm_device *dev)
++{
++	lt8912_drm_dev = dev;
++}
++EXPORT_SYMBOL_GPL(lt8912_bind_drm);
+ 
+ #ifdef 	LT8912_HDP_CHECK
++/*
++ * 判据 = 0xC1 bit7（桥 HDMI 侧接收端的 5V/HPD）。2026-11-24 在 207 板实测：
++ * Tx2 插显示器读到 0xfc、拔掉读到 0x00，可靠；dts 里的 irq-gpio(gpio2_C5)
++ * 两种状态都恒高，不能当判据。
++ */
+ static int lt8912_hpd_status(void *data)
+ {
+ 	int connected = 0;
+ 	u8 rev0 = 0;
+-	
+-	msleep(10000);
+-	while(1) {
++
++	msleep(2000);
++	while (1) {
+ 		lt8912_read(glt8912, I2C_ADDR_MAIN, 0xC1, &rev0, 1);
+ 		connected = (rev0 & BIT(7));
+-		printk("%s:connected = %d,\n",__FUNCTION__, connected);
+-		if((connected > 0) &&(glt8912->hpd_state == false)){
++
++		if ((connected > 0) && (glt8912->hpd_state == false)) {
+ 			gpio_direction_output(glt8912->rst_gpio, 0);
+ 			msleep(1000);
+ 			gpio_direction_output(glt8912->rst_gpio, 1);
+ 			lt8912_enable(1);
+ 			glt8912->hpd_state = true;
+-		}else if((connected == 0) && (glt8912->hpd_state == true)){
++			pr_info("lt8912: Tx2 接入显示器，重新起流\n");
++			if (lt8912_drm_dev)
++				drm_kms_helper_hotplug_event(lt8912_drm_dev);
++		} else if ((connected == 0) && (glt8912->hpd_state == true)) {
+ 			lt8912_enable(0);
+ 			glt8912->hpd_state = false;
++			pr_info("lt8912: Tx2 显示器拔下，停止输出\n");
++			if (lt8912_drm_dev)
++				drm_kms_helper_hotplug_event(lt8912_drm_dev);
+ 		}
+ 		msleep(1000);
+ 	}
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+--- a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+@@ -1298,6 +1298,12 @@
+ 	.get_modes = dw_mipi_dsi_connector_get_modes,
+ };
+ 
++#if IS_ENABLED(CONFIG_DRM_LONTIUM_LT8912)
++/* 本板那颗桥不是 DRM bridge，只是 i2c 器件，只能这样直接问它 */
++int lt8912_get_hpd(void);
++void lt8912_bind_drm(struct drm_device *dev);
++#endif
++
+ static enum drm_connector_status
+ dw_mipi_dsi_connector_detect(struct drm_connector *connector, bool force)
+ {
+@@ -1305,7 +1311,22 @@
+ 
+ 	if (dsi->next_bridge && (dsi->next_bridge->ops & DRM_BRIDGE_OP_DETECT))
+ 		return drm_bridge_detect(dsi->next_bridge);
++
++#if IS_ENABLED(CONFIG_DRM_LONTIUM_LT8912)
++	/*
++	 * LT8912 不在 bridge 链上（视频模式取自 DSI panel 节点），上面那条判断
++	 * 永远走不到，连接器于是恒为 connected —— 没插显示器的 Tx2 变成桌面里
++	 * 一条去不掉的幽灵屏。桥自己能读接收端 5V/HPD，把它接进状态机。
++	 */
++	{
++		int hpd = lt8912_get_hpd();
+ 
++		if (hpd >= 0)
++			return hpd ? connector_status_connected :
++				     connector_status_disconnected;
++	}
++#endif
++
+ 	return connector_status_connected;
+ }
+ 
+@@ -1340,6 +1361,13 @@
+ 		return ret;
+ 	}
+ 
++#if IS_ENABLED(CONFIG_DRM_LONTIUM_LT8912)
++	/* 桥的 hotplug 事件是主路径；polled 只兜"事件早于 DRM 绑定"那一档 */
++	connector->polled = DRM_CONNECTOR_POLL_CONNECT |
++			    DRM_CONNECTOR_POLL_DISCONNECT;
++	lt8912_bind_drm(drm_dev);
++#endif
++
+ 	drm_connector_helper_add(connector,
+ 				 &dw_mipi_dsi_connector_helper_funcs);
+ 	ret = drm_connector_attach_encoder(connector, encoder);
