@@ -455,7 +455,11 @@ LZCAN
 #   而回连守护要等 Powered: yes 才动手，不上电就变成「attach 成功但音箱不回连」。
 # ⚠️ 光有 hci0 还不算「音箱自动连上」：BlueZ 只对 HID 做 auto-connect，A2DP 音频设备必须
 #   有客户端主动 connect。本板 build.env 因此启用 bluetooth-autoconnect（rk-bluetooth-autoconnect
-#   守护，20s 一轮扫 Trusted+Paired 补连）。两层各管各的：这层管 hci0，那层管音箱。
+#   守护，20s 一轮扫 Paired 且音频类的设备补连；授信不作默认门槛，GNOME 配对音频设备时不写
+#   Trusted，拿它当硬条件会把重刷后重新配对的音箱静默跳过 —— 2026-11-25 207 板就是这么踩到的
+#   （当时 /var/lib/bluetooth 里 CM510 连 Trust 键都没有，手动 bluetoothctl connect 一次就成）。
+#   要收紧回旧行为：/etc/rk-bluetooth-autoconnect.conf 写 REQUIRE_TRUSTED=1。
+#   两层各管各的：这层管 hci0，那层管音箱。
 #   板上端到端实测：重启后 03:36:20 守护起来 → 03:36:30 桌面解阻断 → 03:36:43 attach 完成
 #   + 适配器已上电 → 03:36:47 「已自动回连 28:37:13:41:93:4B (HUAWEI CM510)」，
 #   开机约 47s 出声；UI 关开一次（rfkill block→unblock）后 12s 内同样自动回连。
@@ -540,20 +544,31 @@ function post_family_tweaks__lz120_bluetooth() {
 #   · dw-mipi-dsi.c：detect() 在问不到 bridge 时改问 lt8912_get_hpd()；connector_init()
 #     补 polled = POLL_CONNECT|POLL_DISCONNECT，兜「hotplug 事件早于 DRM 绑定」那一档
 #     （rockchip_drm_drv.c 里确实调了 drm_kms_helper_poll_init，轮询才会真的跑）。
-# ⚠️ 热插唤醒后 Tx2 画面底部抖（冷启动两路都接不抖）—— 到 r30 为止的结论，中间假设别当定论：
-#   1) 「厂商唤醒路径复位释放后 0 等待就写寄存器 → 第一笔 0xb2 NACK → 抖」这条**已证伪**：v2
-#      把节拍逐字对齐 probe，r30 板上复测 dmesg 里 wr err 不再出现、画面照抖。
-#   2) 一并排除的：vp1 像素时钟（冷启动与唤醒两次 commit 都是 `set dclk_vop1 to 148500000,
-#      get 148500000`、DSI 带宽同为 996 x 4 Mbps，整场 vp1 只切换过 2 次模式）；桌面侧重排
-#      （journalctl -t lz120-display 只有登录那一条，插拔那几十秒 hook 没动布局）。
-#   3) 现在最可疑的一处不对称：拔出写的 standby_cfg 里有 6 笔寄存器是 enable(1) 那张 init 表
-#      **从不写回**的 —— 0x54=0x1d、0x5c=0x11、0x30=0x08、0x34/0x35/0x36=0x00（比对 lt8912.c
-#      两张表得出，2026-11-24）。冷启动那台从没进过 standby，热插这台带着残留；如果 rst 脚不是
-#      全域复位，「冷启动不抖、热插抖」就说得通。上面档位 0 与 2 就是冲这条设计的对照。
-#   4) 板上还能自己判的三件事：① 抖动是持续的还是十几秒后自愈；② 连拔插 2~3 次是越来越糟
-#      （支持残留假设）还是一样；③ 换档重测后哪一档不抖。注意「在显示设置里切分辨率再切回」
-#      这条路走不通 —— DSI 那路的模式表来自 dts 的 panel 节点，只有 1920x1080 一条，GNOME
-#      里改不动；关开 Tx2 更是别试，运行态关 DSI 会让 VOP2 软硬状态分叉、两屏全黑。
+# ⚠️ 热插唤醒后 Tx2 画面底部抖（冷启动不抖）—— r31 收口成已知问题，现场按「开机前接好屏」用：
+#   1) 已证伪、别再照着改的两条：
+#      · 「厂商唤醒路径复位释放后 0 等待就写寄存器 → 首笔 0xb2 NACK → 抖」：r30 把节拍逐字对齐
+#        probe 之后，dmesg 里 wr err 消失、画面照抖。
+#      · 「拔出写的 standby_cfg 有 6 笔寄存器是 enable(1) 那张 init 表从不写回的（0x54=0x1d、
+#        0x5c=0x11、0x30=0x08、0x34/0x35/0x36=0x00）留下残留」：档位 0 进出都不写 standby_cfg，照抖。
+#   2) 实测排除清单（207 板，r31，2026-11-25）：
+#      · 唤醒线程做哪几步 —— 档位 0/1/2 各走一次完整「拔 → 等 10s → 插」，dmesg 逐条对上，全抖。
+#      · 双屏并发时钟 —— 只接 Tx2 单屏：冷启动不抖，同样拔插后抖。
+#      · vp1 像素时钟 —— 冷启动与唤醒两条路径都是 `set dclk_vop1 to 148500000 / get 148500000`、
+#        DSI 带宽同为 `996 x 4 Mbps`。
+#      · 桌面侧重排 —— `journalctl -t lz120-display` 插拔那几十秒只有登录那一条。
+#      · CRTC 与画面尺寸错位 —— 抖动时 `/sys/kernel/debug/dri/0/state`：video_port1 mode
+#        「1920x1080」60 148500 与冷启动同一条，Smart1-win0 src-pos=1920.0x1080.0 /
+#        crtc-pos=1920x1080+0+0，1:1 没走缩放。
+#   3) 还剩的现象边界：抖只在「Tx2 这一路被 `vop2_crtc_atomic_disable` 关掉、之后重新起流」之后
+#      出现（r31 档位 1 的时间线：311.2 standby → 314.8 crtc disable vp1 → 328.6 重新起流 →
+#      329.8 crtc enable vp1 → 抖）。三档都保持着「桥先配好、DSI host 约 0.9s 之后才推流」这个
+#      与 probe 相同的先后顺序，所以差别不在配表时机。**没试过的是反过来**：等 host 已经起流之后
+#      再由桥做一次完整冷启动等价复位起流（可做成档位 3，代价是插回瞬间再黑一下）。另一条判据也
+#      没量：板子完全不动、只把 Tx2 显示器断电 10s 再通电，抖不抖 —— 那条决定「拔出时干脆不关
+#      Tx2 输出」能不能当修法（代价：拔出后桌面不会把 Tx2 上的窗口收回，热插只剩一半功能）。
+#   4) 已知别再试的两条弯路：「显示设置里切分辨率再切回」走不通 —— DSI 那路的模式表来自 dts 的
+#      panel 节点，只有 1920x1080 一条，GNOME 里改不动；运行态关开 Tx2 更别碰（VOP2 软硬状态
+#      分叉、两屏全黑，2026-11-23 板上复现过）。
 # ⚠️ 「Tx2 在系统设置里顶着『内置显示器』还排第一」这条**没跟着本轮改**，评估结论记在这儿：
 # 标签只由 connector_type 决定（mutter 把 DSI/LVDS/eDP 归 is-builtin），要改只能把连接器类型
 # 报成 DRM_MODE_CONNECTOR_HDMIA。但厂商 VOP2 的 vop2_crtc_mode_fixup() 会遍历本次 atomic
@@ -568,14 +583,76 @@ function post_family_tweaks__lz120_bluetooth() {
 # 实测（r29 出厂镜像，207 板，双屏 dtb）：Tx2 没接 → card0-DSI-1/status = disconnected；
 # 接上 → 线程重新起流并发 hotplug → status = connected、桌面自己长出第二条，主屏仍是原生 Tx1
 # （上面 hook 保证原点与主屏）。冷启动两路都接：不抖。
-# 实测（r30，v2 冷启动同拍时序）：插拔判定与 r29 一致、wr err 消失，但热插唤醒后**仍抖** →
-# 上面第 1) 条证伪，按第 3) 条的档位对照继续查。
+# 实测（r30，v2 与 probe 同拍时序）：插拔判定与 r29 一致、wr err 消失，但热插唤醒后仍抖 →
+# 上面第 1) 条第一条假设证伪。
+# 实测（r31，档位开关版）：207 板首开机 fdtfile = 双屏那份、/sys/module/lt8912/parameters/
+# hpd_wake_action 在且出厂为 1；三档全部走完 → 出图都正常（约 2~3s）、抖动与档位无关 →
+# 出厂默认保持 1，热插功能留着，抖动按上面第 3) 条记成已知遗留。
+# 另记一条 r31 首开机观察：**登录界面落在 Tx2**（进桌面后主屏才回到 Tx1）。GDM 的 greeter 由
+# gdm3 自己的 mutter 管，而 hook 的两个入口是用户会话 autostart 与 **lightdm** 的
+# greeter-setup-script —— 本板出厂是 gdm3+Wayland，登录界面那一段没人管，于是 gdm 按
+# connector_type 把 DSI-1 当内置屏排第一。两条修法：给 gdm 系统用户落一份
+# /var/lib/gdm3/.config/monitors.xml（只动登录界面，不碰内核）；或下面那条 connector_type 改动
+# 一起解决（标签与排序同根因）。
 # 延迟量级 = 1s 轮询 + 复位脉宽 0.1s + 释放后等待 1s + 显示器自己同步 ≈ 2~3s。
 # ⚠️ 出厂默认按上面这套走双屏那份（顶部 BOOT_FDT_FILE 指 ...-linux.dtb，与厂商件同值）。
-#   r31 这一轮要验的是：三个档位下「拔掉再插回，出图之后画面末段抖不抖」。判据看 dmesg 里那句
-#   `lt8912: Tx2 接入显示器，档位 N：…`，同一台机器换档各测一次就够，不用重烧；哪一档不抖，
-#   就把出厂默认从 1 改成哪一档（改 hpd_wake_action 的初值，重出一轮）。
+#   热插这条已经过 r31 三档实测，功能面（detect + 出图）判定为可用，抖动是已知遗留。
 #   真出问题也不必重烧：退回单屏那份即可（改板上 fdtfile 重启），或按上面第 0) 条注释改 .csc
 #   两行重出镜像。
 # 单屏 dtb 下 0004 是惰性的：lt8912 节点 disabled → 驱动不 probe → lt8912_get_hpd() 回
 # -ENODEV → detect 走原分支，行为与没打补丁完全一致。
+#
+# ── 音频（rk809/rk817 codec，r31 实测）───────────────────────────────────────
+# 本板两个 3.5 口分管不同通路：耳麦口＝codec 的 HP 直出（带 mic 偏置、走 hp-det）；
+# 音箱口＝挂在**外置功放**后面（dts 只有 use-ext-amplifier，没有功放节点 → 它是几声道、
+# 输入取哪一路，软件看不到，要查原理图）。
+# 驱动侧两条与排障相关的硬事实（rk817_codec.c）：
+#   · HP_PATH / HP_NO_MIC 是**同一个 case 分支**，寄存器写得一模一样 → 想把通路切成
+#     HP_NO_MIC 来「去掉 mic 偏置引起的噪声」是空操作，mic 归采集侧 Capture MIC Path 管。
+#   · HP 分支写 ADAC_CFG1 = PWD_DACL_ON|PWD_DACR_ON，且 DDAC_VOLL/VOLR 同一个值；
+#     HP Output Gain 是单值控件 → **软件上不存在只让一个声道哑的路径**。听到单声道缺，
+#     直接查插头/线材/插座触点或功放本身。
+#   · 实测在 HP / SPK_HP / HP 三种通路下连读 gpio-115(spk-ctl, ACTIVE_LOW) 恒为 out hi，
+#     通路切换没翻功放使能 —— 未追下去，记着当线索。
+# 实测（2026-11-25，207 板 r31）：3.5 口左右声道能正常出、HP Output Gain 出厂 0dB 够用
+# → 不加板级音量 hook。中途反复出现的「有沙沙声」「右声道无声」**判为模拟链路/负载侧，
+# 与软件无关**，依据是它跟软件设置对不上号：同一个 Playback Path=SPK_HP(6)，冷启动那次
+# 双声道正常无噪声，几分钟后同样 6 却变成右声道哑 + 音箱杂音。软件侧已逐个排掉：
+#   · 两种通路全量寄存器 diff 只差一处（按位值反推是 ADAC_CFG1 的 PWD_DACD 位），
+#     DACL/DACR/DACBIAS 三位在两种通路下都是上电 → 没有让右 DAC 掉电的路径；
+#   · sink 节点名 alsa_output.platform-rk809-sound.stereo-fallback（双声道映射正常）；
+#   · 无回环流灌进 sink（I2S1 Digital Loopback = Disabled、无 null-sink 连线）。
+# 下一步只剩物理排除（现场做）：轻压/转动插头听右声道是否时好时坏 → 换线换负载 →
+# 换一副耳机接另一个口对比。地线接触不良的典型表现正是「一路响、另一路只剩杂音」。
+# ⚠️ 排障纪律：alsa-restore 在**关机时**把运行态控件值写进 /var/lib/alsa/asound.state 并在
+# 下次开机原样恢复，而桌面切 profile 不会回写 codec 的 Playback Path 枚举 → 板上一次
+# `amixer cset numid=12 ...` 会一路留到重刷。实验完必须自己改回去（本板 Playback Path
+# numid=12：3=HP、6=SPK_HP；HP Output Gain numid=19）并 alsactl store，或 rm 掉该文件。
+# 另：simple 名带后缀的控件（'Speaker Switch'/'DAC Playback Volume'）用 `amixer sset` 会报
+# 找不到，要用 cset numid=N。
+#
+# 已知遗留：绿色 Audio Jack1 **右声道偶发无声 + 左声道带杂音**（2026-11-25，207 板 r31）
+# 接口图上这块板两个 3.5 是**分离式**（绿 Jack1＝输出、粉 Jack2＝麦克风输入），不是四段复合口
+# —— 所以「单声道插头把 R 短路到 GND」那条常见成因在这里不成立（厂商 wiki 该页本次访问被拒
+# ERR_CONNECTION_CLOSED，配色按 PC 惯例推断，未逐字核对）。
+# 判为**板端模拟侧**，依据是软件与外设两头都排干了：
+#   · 寄存器实锤：0x31/0x32（DDAC_VOLL/VOLR）同为 0x14＝dts 的 hp-volume=20，左右音量字节一致；
+#     0x2f（ADAC_CFG1）=0x04 → DACBIAS/DACL/DACR 全部上电，只有 DACD 在 HP 通路上断电。
+#     驱动里 HP 与 SPK_HP 的寄存器 diff 也只有 DACD 这一位不同 → 软件不存在让右 DAC 掉电的路径。
+#   · 症状与软件设置无对应关系：同一个 SPK_HP(6)，冷启动那次双声道正常，几分钟后同样设置下
+#     播右声道纯音 3 次全哑；通路 3↔6、Speaker Switch、HP 增益都试遍，症状照旧漂。
+#   · 现场换线、换音箱验证过是好的 → 负载侧排除。
+# 现场判据（下次遇到直接做，别再走一遍软件排查）：轻压/转动插头听右声道是否时好时坏 → 是插座
+# 触点；怎么动都没声 → 耦合电容/后级右半，走厂商维修或换板。软件侧无事可做，不占构建。
+# ✅ 已实测确认（同日稍后）：**重新插拔 3.5 插头后右声道立刻恢复** → 就是插座触点接触不良，
+#    不是耦合电容/后级，也不是线材与音箱（都验证过好）。残留杂音属同一触点问题的后续现象。
+#    对照实测：**同一段内容走蓝牙（A2DP，绕开板上 codec 模拟输出与这个插座）完全干净** →
+#    音源、PipeWire、音箱本身全部无罪，杂音与右声道哑同源、都落在 3.5 模拟链路那一段。
+#    所以现场处理顺序固定为：先重插/插到底 → 右声道回来就到此为止，剩下的是清洁/更换插座。
+#    复测（同日）：重插 + 从蓝牙切回 3.5 之后杂音消失，而 codec 寄存器与杂音最凶时**逐字节相同**
+#    （Playback Path=3、ADAC_CFG1(0x2f)=04、DDAC_VOLL/VOLR(0x31/0x32)=14/14、HP 增益 0）
+#    → 再次证明杂音与软件状态无关，消失是重插把触点弄回去的结果，不是切换设备的功劳。
+# ⚠️ 硬件事实（本板实测）：插着音箱/耳机时 hp-det（gpio-114, ACTIVE LOW）仍恒读 in lo，
+#    即**内核始终认为没插东西**。所以一切依赖耳机插入检测的行为在这块板上都指不上：
+#    自动切换输出、插入时静音内置功放、桌面提示「已插入耳机」都不会发生。要做这些得先
+#    核实这根检测线的实际极性与接法（改 dts 的 ACTIVE_LOW/上拉，或确认它压根没接到插座）。
