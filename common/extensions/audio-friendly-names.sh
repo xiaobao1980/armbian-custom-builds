@@ -44,6 +44,8 @@
 #      桌面会话还没起 → 生成规则后 WirePlumber 首次启动就读到，无需重启音频栈。
 #      脚本按 /sys/class/sound/card* 的 ID_PATH 关键字现场枚举（构建期 chroot 里
 #      没有声卡，写死卡号/卡名换板就废），内容没变化就不回写、不动 udev。
+#      顺带补装 libcanberra-pulse：桌面「声音」面板的扬声器测试与系统提示音走
+#      libcanberra，只带 ALSA 后端时会被 PipeWire 独占声卡挡成静默失败（详见函数内注释）。
 #
 #  做法（无桌面镜像 BUILD_DESKTOP=no）：
 #      装 /usr/local/bin/audio-switch（参考 openEuler rk3576 的同名工具改写）：
@@ -257,6 +259,32 @@ AUDIONAMESUNIT
 		# chroot 里没有 PID 1，systemctl enable 不可用 → 直接建 wants 软链
 		ln -sfn "/etc/systemd/system/rk-audio-names.service" \
 			"${wantsdir}/rk-audio-names.service"
+
+		# -----------------------------------------------------------------
+		# 桌面事件音后端：GNOME「设置 → 声音 → 测试」、XFCE 事件音、系统提示音
+		# 全走 libcanberra，而 canberra 的后端是**运行时按目录挑插件**的。桌面档位
+		# 镜像默认只带 libcanberra-alsa.so（alsa-utils 拖进来的），PipeWire 又独占
+		# 声卡 → ALSA 后端打不开设备（板上 `aplay -D plughw:0,0` 直接报「设备或资源
+		# 忙」），而 canberra 打不开设备是**静默失败**：症状就是「设置里点测试一点
+		# 声音没有，但 pw-play 播同一个文件正常」，很容易被误判成声卡/功放坏了。
+		# 补上 Pulse 后端，让它走 pipewire-pulse 协议而不是直连 ALSA 设备。
+		# 2026-11-25 在 207 板 neardi-lz120 实测：装上 libcanberra-pulse 并重启
+		# 「设置」进程后，左右声道测试 immediate 出声。
+		# 装失败不阻断构建（离线/镜像源缺包都可能），只 warn，现场可补装。
+		# -----------------------------------------------------------------
+		if [[ "${LIBCANBERRA_PULSE:-yes}" == "yes" ]]; then
+			if chroot_sdcard "dpkg -s libcanberra-pulse" >/dev/null 2>&1; then
+				display_alert "Extension: ${EXTENSION}" "libcanberra-pulse 已在镜像内，跳过" "debug"
+			else
+				if ! chroot_sdcard "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcanberra-pulse"; then
+					display_alert "Extension: ${EXTENSION}" "apt-get update 后重试 libcanberra-pulse" "warn"
+					chroot_sdcard "apt-get update -qq"
+					if ! chroot_sdcard "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcanberra-pulse"; then
+						display_alert "Extension: ${EXTENSION}" "libcanberra-pulse 没装上：桌面「声音」面板的扬声器测试与系统提示音会没声（canberra 只剩打不开声卡的 ALSA 后端）。装机后补一次即可：sudo apt-get install -y libcanberra-pulse" "warn"
+					fi
+				fi
+			fi
+		fi
 	else
 		# -----------------------------------------------------------------
 		# 无桌面侧：ALSA 默认出口切换工具（桌面镜像不装，免得 hw: 直连绕过 PipeWire）
