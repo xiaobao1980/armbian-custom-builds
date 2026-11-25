@@ -7,6 +7,15 @@ config:
   branch: rk-6.1-rkr7.2
   last-known-good-tag: v6.1.115
 
+  # 2026-11-25：删掉 001-hid-sony.patch 与 bluetooth-hci-quirk-v6.1-v6.15.patch。
+  # 这两片当年是从 armbian 上游补丁集抄进来的，如今 rk-6.1-rkr7.2 分支已经合并了**同样**的改动
+  # （hid-sony.c 已有 sony_get_usb_ds4_devaddr()/DS4_FEATURE_REPORT_0x12_SIZE；
+  #   hci.h 已有 HCI_QUIRK_BROKEN_PARK_LINK_STATUS；hci_ldisc.c 已按 manufacturer==0xffff && ttyBT
+  #   条件化 set_bit；hci_sync.c 的 lmp_park_capable() 判断已带 !test_bit 守卫），
+  # 重复打就变成 `Exception: Failed to apply 2 patches` —— 别从上游再抄回来。
+  # 注：上游的 hci_ldisc.c 写法比我们那片更严谨（只对 uwe5622 一类生效，而非所有 HCI UART），
+  #     本板 BT 模组是 AP6275P/AP6276P（Broadcom/Cypress），走 hci_uart 但不匹配该条件，行为不变。
+
   # .dts files in these directories will be copied as-is to the build tree; later ones overwrite earlier ones.
   # This is meant to provide a way to "add a board DTS" without having to null-patch them in.
   dts-directories:
