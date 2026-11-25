@@ -20,9 +20,17 @@
 #        本板实测开机 09:55:13 报该错，09:55:47（守护第 2 轮）才连上。
 #        所以 systemd oneshot / 单次 connect 必然失败。
 #
+#  第三个坑（2026-11-25 在 207 板 neardi-lz120 实测出来）：授信门槛。原先要求
+#        `Trusted: yes` 才补连，而 **GNOME 配对音频设备时不写 Trusted**（只有键鼠这类
+#        HID 才自动授信），/var/lib/bluetooth 里那台 CM510 的记录连 Trust 键都没有。
+#        于是重刷镜像重新配对之后，守护把它静默跳过 —— 症状是「手动 `bluetoothctl
+#        connect` 一次就成、音频栈全活，但关开蓝牙后永远不回连」。188 那次验证之所以
+#        通过，是那台音箱当时被授信过，这个洞一直在。
+#
 #  做法：在 rootfs 里装一个 bash 守护 + systemd service，enable 到
 #        multi-user.target.wants（chroot 里没有 PID1，不能用 systemctl enable）。
-#        守护每 20s 枚举 Trusted+Paired 设备，未连接则 connect（12s 超时），
+#        守护每 20s 枚举「Paired 且音频类（Audio Sink/Source/Headset/Handsfree）」设备，
+#        未连接则 connect（12s 超时；授信门槛用 REQUIRE_TRUSTED=1 可收紧回旧行为），
 #        成功写 logger；常驻以便音箱任何时候开机/从别的主机会释放后都能接上。
 #        没有配对设备时循环空转，开销可忽略；没有 bluetooth.service 时 unit
 #        因 Requires 不成立而不启动，非蓝牙板也安全。
@@ -34,7 +42,7 @@
 #    - 手动 disconnect → t=3s no → t=28s yes（守护自愈）。
 #
 #  可移植性：脚本对 BlueZ 版本做了兜底（`devices Paired` 不可用时退回全版本
-#      通用的 `devices`，由循环里的 Paired/Trusted 检查过滤），因此
+#      通用的 `devices`，由循环里的 Paired/音频类检查过滤），因此
 #      noble / jammy / bookworm / trixie 都适用。守护只走 BlueZ D-Bus，
 #      不打开任何硬件节点，与 SoC、板型、蓝牙芯片、X11/Wayland 会话、
 #      是否自动登录均无关；唯一硬要求是 systemd + bluez。
@@ -53,14 +61,18 @@ function post_armbian_repo_customize_image__bluetooth_autoconnect() {
 
 	cat >"${bindir}/rk-bluetooth-autoconnect.sh" <<'BTAUTOCONNECT'
 #!/usr/bin/env bash
-# rk-bluetooth-autoconnect —— 自动回连已配对且授信的蓝牙音频设备
+# rk-bluetooth-autoconnect —— 自动回连已配对的蓝牙音频设备
 #
 # 背景：BlueZ 对 A2DP/HFP 音频设备不会主动回连（只有 HID 类有 auto-connect），
 #       开机后必须由客户端发起 bluetoothctl connect。GNOME 面板也不会自动连。
-# 策略：每 INTERVAL 秒枚举一次 Trusted+Paired 设备，未连接则尝试 connect；
-#       常驻以便音箱任何时候开机都能自动接上（展厅/大屏场景）。
+# 策略：每 INTERVAL 秒枚举一次 Paired 且音频类的设备，未连接则尝试 connect；
+#       常驻以便音箱任何时候开机、或从别的主机释放后都能自动接上（展厅/大屏场景）。
+#       只碰音频类：HID（键鼠）BlueZ 自己会回连，交给它，免得守护抢着连非音频设备。
+#       授信（Trusted）默认不作门槛 —— GNOME 配对音频设备不写 Trusted，见扩展头注释。
 # 可选配置 /etc/rk-bluetooth-autoconnect.conf：
-#       MACS="AA:BB:CC:DD:EE:FF"   # 限定设备，空=全部授信配对设备
+#       MACS="AA:BB:CC:DD:EE:FF"   # 限定设备，空=全部配对的音频设备
+#       REQUIRE_TRUSTED=1          # 置 1 = 只连授信(Trusted)设备，退回旧行为
+#       FAIL_LOG_INTERVAL=120      # 同一台设备回连失败最多这么多秒记一次
 #       INTERVAL=20                # 轮询间隔（秒）
 #       CONNECT_TIMEOUT=12         # 单次 connect 超时（秒）
 set -u
@@ -68,7 +80,10 @@ CONF=/etc/rk-bluetooth-autoconnect.conf
 [ -r "$CONF" ] && . "$CONF"
 INTERVAL=${INTERVAL:-20}
 CONNECT_TIMEOUT=${CONNECT_TIMEOUT:-12}
+REQUIRE_TRUSTED=${REQUIRE_TRUSTED:-0}
+FAIL_LOG_INTERVAL=${FAIL_LOG_INTERVAL:-120}
 log() { logger -t rk-bt-autoconnect -- "$*"; }
+declare -A LASTFAIL   # 各设备上次「回连失败」的时间戳，用于限频记日志
 
 # 等 bluetoothd 就绪（最多 60s）
 for _ in $(seq 1 30); do
@@ -82,7 +97,7 @@ while :; do
         DEVS="$MACS"
     else
         # `devices Paired` 过滤参数是较新 BlueZ 才有；老版本返回空/报错时
-        # 退回全版本通用的 `devices`（循环里的 Paired+Trusted 检查会过滤）。
+        # 退回全版本通用的 `devices`（循环里的 Paired+音频类检查会过滤）。
         # 这样同一份脚本在 noble / jammy / bookworm / trixie 都能用。
         DEVS=$(bluetoothctl devices Paired 2>/dev/null | awk '/^Device /{print $2}')
         [ -z "$DEVS" ] && DEVS=$(bluetoothctl devices 2>/dev/null | awk '/^Device /{print $2}')
@@ -90,11 +105,21 @@ while :; do
     for mac in $DEVS; do
         st=$(bluetoothctl info "$mac" 2>/dev/null)
         printf '%s\n' "$st" | grep -q 'Paired: yes' || continue
-        printf '%s\n' "$st" | grep -q 'Trusted: yes' || continue
+        if [ "$REQUIRE_TRUSTED" = "1" ]; then
+            printf '%s\n' "$st" | grep -q 'Trusted: yes' || continue
+        fi
+        printf '%s\n' "$st" | grep -qaE 'Audio Sink|Audio Source|Headset|Handsfree' || continue
         printf '%s\n' "$st" | grep -q 'Connected: yes' && continue
         out=$(timeout "$CONNECT_TIMEOUT" bluetoothctl connect "$mac" 2>&1)
         if printf '%s\n' "$out" | grep -aq 'Connection successful\|Connected: yes'; then
             log "已自动回连 $mac ($(printf '%s\n' "$st" | grep -a 'Name:' | head -1 | sed 's/^[[:space:]]*Name: //'))"
+        else
+            # 音箱关着机时这行会反复触发，故按设备限频；不限频的话现场翻日志只看到一片失败
+            now=$(date +%s)
+            if (( now - ${LASTFAIL[$mac]:-0} >= FAIL_LOG_INTERVAL )); then
+                LASTFAIL[$mac]=$now
+                log "回连 $mac 未成功：$(printf '%s' "$out" | tr '\n\r' '  ' | tail -c 120)"
+            fi
         fi
     done
     sleep "$INTERVAL"
@@ -104,7 +129,7 @@ BTAUTOCONNECT
 
 	cat >"${unitdir}/rk-bluetooth-autoconnect.service" <<'BTAUTOUNIT'
 [Unit]
-Description=Auto-reconnect trusted paired Bluetooth audio devices
+Description=Auto-reconnect paired Bluetooth audio devices
 Documentation=https://github.com/xiaobao1980/armbian-custom-builds
 After=bluetooth.service
 Requires=bluetooth.service
@@ -129,7 +154,8 @@ BTAUTOUNIT
 	if [[ ! -f "${SDCARD}/etc/rk-bluetooth-autoconnect.conf" ]]; then
 		cat >"${SDCARD}/etc/rk-bluetooth-autoconnect.conf" <<'BTAUTOCONF'
 # rk-bluetooth-autoconnect 可选配置（留空即用默认值）
-# MACS="AA:BB:CC:DD:EE:FF"   # 只自动连指定设备；不填=所有授信(Trusted)配对设备
+# MACS="AA:BB:CC:DD:EE:FF"   # 只自动连指定设备；不填=所有已配对的音频设备
+# REQUIRE_TRUSTED=0          # 置 1 = 只连授信(Trusted)设备（旧行为；GNOME 配对音频不写授信）
 # INTERVAL=20                # 轮询间隔（秒）
 # CONNECT_TIMEOUT=12         # 单次 connect 超时（秒）
 BTAUTOCONF
