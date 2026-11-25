@@ -27,16 +27,16 @@
 #      · 0.4（noble，0.4.17）：Lua 片段 /etc/wireplumber/main.lua.d/51-*.lua，
 #        必须 table.insert(alsa_monitor.rules, {...}) —— 直接 alsa_monitor.rules = {...}
 #        会**整表覆盖** 50-alsa-config.lua 里的 api.alsa.use-acp 等默认规则，音频会坏。
-#      · 0.5（trixie）：SPA-JSON 片段 /etc/wireplumber/wireplumber.conf.d/51-*.conf，
+#      · 0.5+（trixie / resolute）：SPA-JSON 片段 /etc/wireplumber/wireplumber.conf.d/51-*.conf，
 #        monitor.alsa.rules = [...] 是**追加**语义（要覆盖得写 override. 前缀），
 #        正则匹配必须带 "~" 前缀，且用 [.] 代替 \. （SPA-JSON 字符串不认 \. 转义）。
 #      注意 0.4.17 也装了 /usr/share/wireplumber/wireplumber.conf，所以判版本要
 #      **先看 main.lua.d 目录**，不能只看有没有 wireplumber.conf。
-#      验证边界：0.4 分支在 cm3588-nas（noble）实跑通过；0.5 分支只做了离线校验
-#      —— 生成的片段按 SPA-JSON 归一化成严格 JSON 能解析（键名 monitor.alsa.rules、
-#      括号逗号都对），且每条 ~正则 用 grep -E（与 WirePlumber 同款 POSIX ERE）
-#      都能命中 pw-dump 里的真实对象名。手边没有 trixie 板，首次 trixie 桌面镜像
-#      构建出来后建议上机确认一次中文名生效。
+#      验证状态：0.4 分支在 cm3588-nas（noble，WirePlumber 0.4.17）实跑通过；
+#      JSON 分支 2026-11-25 在同一块板重刷成 Ubuntu 26.04 resolute
+#      （PipeWire/WirePlumber 1.6.2，无 main.lua.d → flavor=json）实跑通过：
+#      wpctl status 里四张卡的 Device 名与 Sink/Source 名都换成中文名，
+#      rt5616 的 Sink 是默认出口、profile 保持 output+input。
 #
 #  做法（桌面镜像 BUILD_DESKTOP=yes）：
 #      装 /usr/local/sbin/rk-audio-names.sh + rk-audio-names.service（oneshot，
@@ -54,6 +54,15 @@
 #      hdmiin 就是纯采集卡，切过去必然没声）。
 #      **不预设默认出口**：NAS/展厅要 HDMI 还是耳机取决于接法，出厂写死容易猜错，
 #      装机后跑一次 `sudo audio-switch hdmi`（或 3.5）即可，`audio-switch list` 看候选。
+#
+#  排障（2026-11-25 cm3588-nas「设置→声音 里没有 3.5 音频」的结论）：
+#      真因不是缺设备。`wpctl status` 里 alsa_output.platform-rt5616-sound.stereo-fallback
+#      一直在、还是默认 Sink、profile 也是 output+input —— 只是当时的名字「耳机输出/
+#      麦克风输入」不带「3.5」字样，一屏 HDMI/DP 里认不出来；再叠上那个镜像早于
+#      libcanberra-pulse 修复、「测试」按钮点了没响，就报成了「没有 3.5」。
+#      所以查这类反馈先看 wpctl / pw-dump 的 Sink 名单再下结论，别照名字判。
+#      另注：PipeWire 把某张卡判成只剩采集节点时，看 pw-dump 该 Device 的
+#      EnumProfile 里 output 那档 available 是不是 "no"（插孔检测导致），这才是真缺出口。
 #
 #  可移植性：只依赖 udevadm + systemd；桌面侧按 WirePlumber 实际版本选语法，
 #      没装 WirePlumber（纯 PulseAudio / 纯 ALSA）时只落 udev 规则，不报错。
@@ -108,6 +117,9 @@ log() {
 #                 真机上 rt5616 到底注册不注册，待 aplay -l 确认）
 #   cm3588-nas  hdmiin / rt5616 / hdmi0 / dp0 / hdmi1
 #   neardi-lz200 es8388-sound / hdmi-sound / dp0-sound（dp2/edp 都是 disabled，不注册）
+# 3.5mm 口那几条**必须带「3.5mm」字样**：面板里只写「耳机输出」时，用户对着
+# 一屏 HDMI/DP 找不到哪个是绿色那个口（2026-11-25 cm3588-nas 实测反馈：3.5 出口
+# 其实一直在，就是认不出来）。和 audio-switch 的 label_of 保持同一措辞。
 friendly_name() {
 	case "$1" in
 		*hdmiin*|*hdmirx*|*hdmi-rx*|*hdmi_rx*)          echo "HDMI-IN 音频输入" ;;
@@ -121,9 +133,9 @@ friendly_name() {
 		*es7243*|*linein*|*line-in*|*pdm-mic*)          echo "线路/麦克风输入（采集）" ;;
 		*ms4344*)                                       echo "3.5mm 耳机输出（占位无声）" ;;
 		*ht5010*)                                       echo "3.5mm 耳机输出" ;;
-		*rt5616*|*es8388*|*es8328*|*es8316*|*es8323*)   echo "耳机输出/麦克风输入" ;;
-		*rk809*|*rk817*|*rk816*)                        echo "耳机输出/麦克风输入（PMIC codec）" ;;
-		*codec*|*headphone*)                            echo "耳机输出/麦克风输入" ;;
+		*rt5616*|*es8388*|*es8328*|*es8316*|*es8323*)   echo "3.5mm 耳机输出/麦克风输入" ;;
+		*rk809*|*rk817*|*rk816*)                        echo "3.5mm 耳机输出/麦克风输入（PMIC codec）" ;;
+		*codec*|*headphone*)                            echo "3.5mm 耳机输出/麦克风输入" ;;
 		*)                                              echo "" ;;
 	esac
 }
