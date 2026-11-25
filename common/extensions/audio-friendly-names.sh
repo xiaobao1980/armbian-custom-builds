@@ -113,8 +113,9 @@ log() {
 #   rock-5-itx  es8316-sound / hdmi1-sound / dp0-sound / dp1-sound / hdmiin-sound
 #   am60-sa12   hdmi0/hdmi1/dp0/hdmiin + it6621-sound(cpu=spdif_tx0，HDMI 桥)
 #               + ms4344-dac-sound(3.5mm 占位，DTS 注明 dummy 不出声) + es7243-adc-linein(纯采集)
-#               （板级 DTS 里没有 rt5616 节点；只有 overlay 里那套 rt5616 脚本按 cm3588-nas 抄过来的，
-#                 真机上 rt5616 到底注册不注册，待 aplay -l 确认）
+#               （板级 DTS 里没有 rt5616 节点 —— 2026-11-25 逐行核对 rk3588-am60-sa12.dts 及其
+#                 #include 确认，所以 3.5 那路只有 ms4344 占位；overlay 里那套按 cm3588-nas 抄来的
+#                 rt5616 脚本/UCM/WirePlumber 件已随之删除，本板不启用 rt5616-audio-route）
 #   cm3588-nas  hdmiin / rt5616 / hdmi0 / dp0 / hdmi1
 #   neardi-lz200 es8388-sound / hdmi-sound / dp0-sound（dp2/edp 都是 disabled，不注册）
 # 3.5mm 口那几条**必须带「3.5mm」字样**：面板里只写「耳机输出」时，用户对着
